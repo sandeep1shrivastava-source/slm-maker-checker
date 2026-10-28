@@ -1,0 +1,7 @@
+Plaintext
+venv/
+.venv/
+.streamlit/secrets.toml
+__pycache__/
+*.xlsx
+*.pyc
