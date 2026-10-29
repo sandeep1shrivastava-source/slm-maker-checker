@@ -2,12 +2,11 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# High-speed flash models for large-document generation
+# Active Google Gemini Flash model tier
 FALLBACK_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-3.8-flash"
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite"
 ]
 
 def get_api_key_pool() -> list:
@@ -24,7 +23,6 @@ def get_api_key_pool() -> list:
                 else:
                     raw_keys.append(val)
 
-    # Flatten nested lists and ensure each key is a stripped string
     clean_keys = []
     for k in raw_keys:
         if isinstance(k, (list, tuple)):
@@ -34,7 +32,6 @@ def get_api_key_pool() -> list:
         elif isinstance(k, str) and k.strip():
             clean_keys.append(k.strip())
 
-    # Remove duplicates while preserving priority order
     deduped = []
     for k in clean_keys:
         if k not in deduped:
@@ -47,7 +44,7 @@ def get_api_key_pool() -> list:
 def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
     """
     Executes generation with streaming to prevent 504 Deadline Exceeded idle timeouts,
-    paired with multi-model and multi-key failover for 429 quota resilience.
+    paired with multi-model and multi-key failover for 429 quota and 404 deprecation resilience.
     """
     key_pool = get_api_key_pool()
     cfg = {"temperature": temp}
@@ -58,7 +55,8 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
     retryable_triggers = [
         "429", "quota", "resourceexhausted",
         "504", "deadline", "timeout", "timed out",
-        "503", "unavailable"
+        "503", "unavailable",
+        "404", "not found", "no longer available"
     ]
 
     for model_name in FALLBACK_MODELS:
@@ -71,7 +69,7 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
                     generation_config=cfg
                 )
                 
-                # Streaming keeps the HTTP connection active during long generations
+                # Streaming keeps the HTTP connection active during long document generations
                 if not json_mode:
                     response = model.generate_content(
                         user_payload,
@@ -98,6 +96,7 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
+                # Failover to next key or active model
                 if any(trigger in err_str for trigger in retryable_triggers):
                     continue
                 else:
@@ -111,7 +110,6 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
 def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: str) -> str:
     from prompts.academic_formats import MCQ_PROMPT, PPT_PROMPT, FAQS_MISCONCEPTIONS_PROMPT
 
-    # Guard against list inputs from document parsers
     if isinstance(syllabus, list):
         syllabus = "\n".join(str(s) for s in syllabus)
     if isinstance(reference, list):
@@ -207,10 +205,4 @@ Return ONLY a valid JSON object matching this schema:
     {"dimension": "Bloom's Taxonomy Verbs", "status": "PASS", "finding": "Measurable cognitive action verbs applied consistently.", "severity": "None"},
     {"dimension": "Pedagogical Tone Calibration", "status": "PASS", "finding": "Academic tone strictly adheres to university Quadrant-II specifications.", "severity": "None"}
   ],
-  "structural_drift_analysis": "Zero prompt drift observed. Manuscript adhered strictly to university authoring parameters."
-}"""
-
-def run_stage_3_prompt_audit(draft: str, deliverable: str) -> dict:
-    user_payload = f"Deliverable Format: {deliverable}\n\nDraft Text to Audit:\n{draft}"
-    res_text = generate_with_resilience(PROMPT_AUDITOR_SYSTEM, user_payload, json_mode=True, temp=0.0)
-    return json.loads(res_text)
+  "structural_drift_analysis": "Zero prompt drift observed. Manuscript adhered strictly to university authoring
