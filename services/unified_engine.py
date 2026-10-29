@@ -2,7 +2,7 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# Priority model rotation list
+# High-speed flash models for large-document generation
 FALLBACK_MODELS = [
     "gemini-2.5-flash",
     "gemini-2.0-flash",
@@ -23,8 +23,8 @@ def get_api_key_pool() -> list:
 
 def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
     """
-    Executes generation with a 600-second deadline and multi-model/multi-key failover
-    against 429 (Quota), 504 (Deadline Exceeded), and 503 (Service Unavailable).
+    Executes generation with streaming to prevent 504 Deadline Exceeded idle timeouts,
+    paired with multi-model failover for 429 quota resilience.
     """
     key_pool = get_api_key_pool()
     if not key_pool:
@@ -37,7 +37,7 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
     last_error = None
     retryable_triggers = [
         "429", "quota", "resourceexhausted",
-        "504", "deadline", "timed out", "timeout",
+        "504", "deadline", "timeout", "timed out",
         "503", "unavailable"
     ]
 
@@ -50,23 +50,40 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
                     system_instruction=system_instruction,
                     generation_config=cfg
                 )
-                # Explicit 600s timeout prevents 504 Deadline Exceeded during large unit generation
-                response = model.generate_content(
-                    user_payload,
-                    request_options={"timeout": 600.0}
-                )
-                return response.text
+                
+                # Use streaming for non-JSON text to keep the network connection active
+                if not json_mode:
+                    response = model.generate_content(
+                        user_payload,
+                        stream=True,
+                        request_options={"timeout": 600.0}
+                    )
+                    text_accumulator = []
+                    for chunk in response:
+                        try:
+                            if chunk.text:
+                                text_accumulator.append(chunk.text)
+                        except Exception:
+                            continue
+                    if text_accumulator:
+                        return "".join(text_accumulator)
+                else:
+                    response = model.generate_content(
+                        user_payload,
+                        stream=False,
+                        request_options={"timeout": 300.0}
+                    )
+                    return response.text
 
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
-                # Failover to next key or fallback model if quota or timeout is encountered
                 if any(trigger in err_str for trigger in retryable_triggers):
                     continue
                 else:
                     raise e
 
-    raise RuntimeError(f"All models and keys failed. Last error encountered: {last_error}")
+    raise RuntimeError(f"All models and keys exhausted. Last error: {last_error}")
 
 # -------------------------------------------------------------
 # STAGE 1: AI MAKER ENGINE (5 Exact Review Formats)
