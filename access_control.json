@@ -1,0 +1,25 @@
+{
+    "universities": [
+        "State Open University",
+        "National Institute of Distance Education",
+        "Apex Central University"
+    ],
+    "users": {
+        "admin@university.edu": {
+            "role": "Lead Administrator",
+            "status": "Active"
+        },
+        "maker@university.edu": {
+            "role": "Maker (Author)",
+            "status": "Active"
+        },
+        "checker@university.edu": {
+            "role": "Checker (Auditor)",
+            "status": "Active"
+        },
+        "prompt-auditor@university.edu": {
+            "role": "Prompt Engineer",
+            "status": "Active"
+        }
+    }
+}

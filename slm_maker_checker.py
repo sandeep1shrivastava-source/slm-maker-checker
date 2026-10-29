@@ -3,10 +3,11 @@ from services.llm_client import run_maker_generation, run_stage_3_audits
 from services.deterministic_qa import run_pre_checks
 from services.report_generator import build_audit_excel
 from services.docx_handler import extract_text_from_docx, generate_slm_docx
+from services.prompt_auditor import run_deep_prompt_audit
 
 st.set_page_config(page_title="Academic Content Maker-Checker Hub", layout="wide")
 st.title("University Academic Content Maker–Checker Hub")
-st.caption("Automated Authoring, Bloom's Taxonomy Alignment, and Independent Quality Auditing")
+st.caption("Automated Authoring, Pedagogical QA, and Deep Prompt Compliance Auditing")
 
 if "stage" not in st.session_state:
     st.session_state.stage = "INPUT"
@@ -14,8 +15,17 @@ if "draft_text" not in st.session_state:
     st.session_state.draft_text = ""
 if "audit_results" not in st.session_state:
     st.session_state.audit_results = None
+if "prompt_results" not in st.session_state:
+    st.session_state.prompt_results = None
 
-# Sidebar: Institution & Workflow Configuration
+# ==========================================
+# SIDEBAR CONFIGURATION (INCLUDES EMAIL TAG)
+# ==========================================
+st.sidebar.header("Operator & Access")
+operator_email = st.sidebar.text_input("Assigned User Email", value="sandeep@university.edu")
+assigned_role = st.sidebar.selectbox("Active Workflow Role", ["Lead Reviewer (Full Access)", "Maker (Author)", "Checker (Auditor)"])
+
+st.sidebar.divider()
 st.sidebar.header("Institutional Details")
 university_name = st.sidebar.text_input("Name of the University", value="State Open University")
 program_name = st.sidebar.text_input("Program / Discipline", value="Master of Business Administration (MBA)")
@@ -24,15 +34,18 @@ st.sidebar.header("Workflow Settings")
 deliverable_type = st.sidebar.selectbox("Deliverable Format", ["Self-Learning Material (SLM)", "Question Bank (QB)"])
 academic_level = st.sidebar.selectbox("Academic Level", ["Postgraduate (PG)", "Undergraduate (UG)"])
 
-# Consolidated metadata bundle
 app_metadata = {
     "university_name": university_name,
     "program_name": program_name,
     "deliverable_type": deliverable_type,
-    "academic_level": academic_level
+    "academic_level": academic_level,
+    "operator_email": operator_email,
+    "assigned_role": assigned_role
 }
 
-# Input Section: Dual File Uploader + Fallback Text Areas
+# ==========================================
+# INPUT SECTION (EXISTING WORKING CODE)
+# ==========================================
 col1, col2 = st.columns(2)
 
 with col1:
@@ -65,29 +78,59 @@ with col2:
 
 st.divider()
 
-# Action Area
-col_btn1, col_btn2 = st.columns(2)
+# ==========================================
+# ACTION BUTTONS: STEP 1, STEP 2, AND STEP 3
+# ==========================================
+b_col1, b_col2, b_col3 = st.columns(3)
 
-with col_btn1:
+with b_col1:
     if st.button("Step 1: Run AI Maker (Draft Content)", type="primary", use_container_width=True):
         if not syllabus_data.strip() or not reference_data.strip():
-            st.error("Please supply both syllabus and reference sources (via upload or paste).")
+            st.error("Please supply both syllabus and reference sources.")
         else:
-            with st.spinner(f"Authoring {deliverable_type} according to university standards..."):
+            with st.spinner(f"Authoring {deliverable_type}..."):
                 try:
                     st.session_state.draft_text = run_maker_generation(syllabus_data, reference_data, academic_level)
                     st.session_state.stage = "DRAFT_READY"
+                    st.session_state.audit_results = None
+                    st.session_state.prompt_results = None
                     st.rerun()
                 except Exception as err:
                     st.error(f"Generation Failed: {err}")
 
-# Maker Results Card
+with b_col2:
+    if st.button("Step 2: Run Stage 2 & 3 Quality Audits", use_container_width=True, disabled=(st.session_state.draft_text == "")):
+        with st.spinner("Executing Deterministic Pre-checks and Academic Auditing..."):
+            try:
+                qa_res = run_pre_checks(st.session_state.draft_text)
+                if not qa_res["passed"]:
+                    st.warning(f"Deterministic QA Flags: {qa_res['flags']}")
+
+                audit_res = run_stage_3_audits(st.session_state.draft_text, syllabus_data, reference_data)
+                st.session_state.audit_results = audit_res
+                st.session_state.stage = "AUDITED"
+                st.rerun()
+            except Exception as err:
+                st.error(f"Audit Failed: {err}")
+
+with b_col3:
+    if st.button("Step 3: Run Deep Prompt Checking", use_container_width=True, disabled=(st.session_state.draft_text == "")):
+        with st.spinner("Analyzing Prompt Adherence, Negative Constraints, and Schemas..."):
+            try:
+                p_res = run_deep_prompt_audit(st.session_state.draft_text, deliverable_type)
+                st.session_state.prompt_results = p_res
+                st.rerun()
+            except Exception as err:
+                st.error(f"Prompt Audit Failed: {err}")
+
+# ==========================================
+# STEP 1: OUTPUT & MAKER DOCX DOWNLOAD
+# ==========================================
 if st.session_state.draft_text:
     st.subheader(f"Generated {deliverable_type} Output")
     with st.expander("Preview Content in Markdown", expanded=False):
         st.markdown(st.session_state.draft_text)
 
-    # Independent Maker Download Button with metadata header
     maker_docx_bytes = generate_slm_docx(
         title=f"{deliverable_type} Unit Manuscript",
         content_markdown=st.session_state.draft_text,
@@ -100,36 +143,21 @@ if st.session_state.draft_text:
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
-# Checker Audit Action
-if st.session_state.stage in ["DRAFT_READY", "AUDITED"]:
-    with col_btn2:
-        if st.button("Step 2: Run Stage 2 & 3 Quality Audits", use_container_width=True):
-            with st.spinner("Executing Deterministic Pre-checks and Parallel AI Checkers..."):
-                try:
-                    qa_res = run_pre_checks(st.session_state.draft_text)
-                    if not qa_res["passed"]:
-                        st.warning(f"Deterministic QA Flags: {qa_res['flags']}")
-
-                    audit_res = run_stage_3_audits(st.session_state.draft_text, syllabus_data, reference_data)
-                    st.session_state.audit_results = audit_res
-                    st.session_state.stage = "AUDITED"
-                    st.rerun()
-                except Exception as err:
-                    st.error(f"Audit Execution Failed: {err}")
-
-# Checker Results & Dashboard
+# ==========================================
+# STEP 2: CHECKER AUDIT DOSSIER
+# ==========================================
 if st.session_state.audit_results:
     res = st.session_state.audit_results
     st.divider()
-    st.subheader("Stage 3: Independent Audit Dossier")
+    st.subheader("Stage 2: Independent Academic Quality Audit")
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Final Gate Decision", res["decision"])
     m2.metric("Weighted Quality Score", f"{res['score']:.1f}%")
     m3.metric("Syllabus Coverage", f"{res['coverage_pct']:.1f}%")
-    m4.metric("Prompt Adherence", res["prompt_status"])
+    m4.metric("Audited By", operator_email)
 
-    tab_err, tab_syl, tab_prompt = st.tabs(["Error Register", "Syllabus Matrix", "Prompt Adherence"])
+    tab_err, tab_syl, tab_prompt = st.tabs(["Error Register", "Syllabus Matrix", "Standard Prompt Logs"])
     with tab_err:
         st.dataframe(res["error_register"], use_container_width=True)
     with tab_syl:
@@ -137,7 +165,6 @@ if st.session_state.audit_results:
     with tab_prompt:
         st.dataframe(res["prompt_adherence_logs"], use_container_width=True)
 
-    # Independent Checker Download Button with metadata embedded
     excel_bytes = build_audit_excel(res, metadata=app_metadata)
     st.download_button(
         label="Download Comprehensive Checker Audit Report (.xlsx)",
@@ -146,3 +173,19 @@ if st.session_state.audit_results:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
+
+# ==========================================
+# STEP 3: DEEP PROMPT AUDIT FINDINGS
+# ==========================================
+if st.session_state.prompt_results:
+    p_data = st.session_state.prompt_results
+    st.divider()
+    st.subheader("Stage 3: Deep Prompt Compliance & Constraint Verification")
+
+    pm1, pm2, pm3 = st.columns(3)
+    pm1.metric("Prompt Compliance Score", f"{p_data.get('prompt_score', 0):.1f}%")
+    pm2.metric("Compliance Status", p_data.get("status", "COMPLIANT"))
+    pm3.metric("Negative Constraint Violations", p_data.get("negative_constraint_violations", 0))
+
+    st.dataframe(p_data.get("checks", []), use_container_width=True)
+    st.info(f"**Structural Drift Assessment:** {p_data.get('drift_notes', 'Adhered to target guidelines.')}")
