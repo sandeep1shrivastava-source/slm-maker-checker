@@ -2,7 +2,6 @@ import json
 import google.generativeai as genai
 import streamlit as st
 
-# Active Google Gemini Flash model tier
 FALLBACK_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.6-flash",
@@ -10,7 +9,6 @@ FALLBACK_MODELS = [
 ]
 
 def get_api_key_pool() -> list:
-    """Safely extracts API keys whether defined as a single string, a list, or comma-separated values."""
     raw_keys = []
     for secret_name in ["GEMINI_API_KEYS", "GEMINI_API_KEY"]:
         if secret_name in st.secrets:
@@ -42,10 +40,6 @@ def get_api_key_pool() -> list:
     return deduped
 
 def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
-    """
-    Executes generation with streaming to prevent 504 Deadline Exceeded idle timeouts,
-    paired with multi-model and multi-key failover for 429 quota and 404 deprecation resilience.
-    """
     key_pool = get_api_key_pool()
     cfg = {"temperature": temp}
     if json_mode:
@@ -69,7 +63,6 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
                     generation_config=cfg
                 )
                 
-                # Streaming keeps the HTTP connection active during long document generations
                 if not json_mode:
                     response = model.generate_content(
                         user_payload,
@@ -96,7 +89,6 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
             except Exception as e:
                 err_str = str(e).lower()
                 last_error = e
-                # Failover to next key or active model
                 if any(trigger in err_str for trigger in retryable_triggers):
                     continue
                 else:
@@ -104,9 +96,6 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
 
     raise RuntimeError(f"All models and keys exhausted. Last error: {last_error}")
 
-# -------------------------------------------------------------
-# STAGE 1: AI MAKER ENGINE (5 Exact Review Formats)
-# -------------------------------------------------------------
 def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: str) -> str:
     from prompts.academic_formats import MCQ_PROMPT, PPT_PROMPT, FAQS_MISCONCEPTIONS_PROMPT
 
@@ -131,16 +120,12 @@ def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: st
     elif deliverable == "FAQs & Misconceptions Review":
         sys_prompt = FAQS_MISCONCEPTIONS_PROMPT
     else:
-        # Default: SLM
         from prompts.maker_prompts import MAKER_SYSTEM_PROMPT, MAKER_USER_TEMPLATE
         sys_prompt = MAKER_SYSTEM_PROMPT
         user_payload = MAKER_USER_TEMPLATE.format(academic_level=level, syllabus=syllabus, reference=reference)
 
     return generate_with_resilience(sys_prompt, user_payload, json_mode=False, temp=0.35)
 
-# -------------------------------------------------------------
-# STAGE 2: ACADEMIC QUALITY & SYLLABUS CHECKER
-# -------------------------------------------------------------
 def run_stage_2_checker(draft: str, syllabus: str, reference: str) -> dict:
     from prompts.checker_prompts import CHECKER_SYSTEM_PROMPT
     from prompts.mapping_prompts import MAPPING_SYSTEM_PROMPT
@@ -181,9 +166,6 @@ def run_stage_2_checker(draft: str, syllabus: str, reference: str) -> dict:
         "syllabus_mapping": mapping_data.get("syllabus_mapping", [])
     }
 
-# -------------------------------------------------------------
-# STAGE 3: DEEP PROMPT AUDITOR & INSTRUCTION COMPLIANCE
-# -------------------------------------------------------------
 PROMPT_AUDITOR_SYSTEM = """You are a Principal AI Prompt Compliance Auditor for University Educational Content.
 Perform a strict Meta-Audit on the provided manuscript against generation prompt constraints and guardrails.
 
@@ -205,4 +187,10 @@ Return ONLY a valid JSON object matching this schema:
     {"dimension": "Bloom's Taxonomy Verbs", "status": "PASS", "finding": "Measurable cognitive action verbs applied consistently.", "severity": "None"},
     {"dimension": "Pedagogical Tone Calibration", "status": "PASS", "finding": "Academic tone strictly adheres to university Quadrant-II specifications.", "severity": "None"}
   ],
-  "structural_drift_analysis": "Zero prompt drift observed. Manuscript adhered strictly to university authoring
+  "structural_drift_analysis": "Zero prompt drift observed. Manuscript adhered strictly to university authoring parameters."
+}"""
+
+def run_stage_3_prompt_audit(draft: str, deliverable: str) -> dict:
+    user_payload = f"Deliverable Format: {deliverable}\n\nDraft Text to Audit:\n{draft}"
+    res_text = generate_with_resilience(PROMPT_AUDITOR_SYSTEM, user_payload, json_mode=True, temp=0.0)
+    return json.loads(res_text)
