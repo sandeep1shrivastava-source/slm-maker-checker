@@ -5,7 +5,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.dataframe import dataframe_to_rows
 
-def build_audit_excel(audit_results: dict) -> bytes:
+def build_audit_excel(audit_results: dict, metadata: dict = None) -> bytes:
     wb = Workbook()
 
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -28,12 +28,20 @@ def build_audit_excel(audit_results: dict) -> bytes:
         for i, col in enumerate(df.columns, 1):
             ws.column_dimensions[get_column_letter(i)].width = max(len(str(col)) + 5, 22)
 
-    # 1. Dashboard Tab
+    # 1. Dashboard Tab with Institutional Metadata
     ws_dash = wb.active
     ws_dash.title = "Audit Dashboard"
+
+    uni = metadata.get("university_name", "N/A") if metadata else "N/A"
+    prog = metadata.get("program_name", "N/A") if metadata else "N/A"
+    deliv = metadata.get("deliverable_type", "SLM Unit") if metadata else "SLM Unit"
+
     dash_metrics = [
-        ["Metric", "Value", "Benchmark Threshold"],
-        ["Audit Decision", audit_results.get("decision", "REVISE"), "PASS"],
+        ["Audit Parameter / Metric", "Recorded Value", "Benchmark Threshold"],
+        ["Target University", uni, "Accredited Institution"],
+        ["Academic Program", prog, "Approved Curriculum"],
+        ["Deliverable Type", deliv, "Mandatory Scope"],
+        ["Final Gate Decision", audit_results.get("decision", "REVISE"), "PASS"],
         ["Weighted Quality Score", f"{audit_results.get('score', 0):.1f}%", ">= 95.0%"],
         ["Syllabus Coverage", f"{audit_results.get('coverage_pct', 0):.1f}%", "100.0%"],
         ["Prompt Adherence Status", audit_results.get("prompt_status", "FAIL"), "PASS"],
@@ -45,8 +53,11 @@ def build_audit_excel(audit_results: dict) -> bytes:
         cell.fill = header_fill
         cell.font = header_font
         cell.border = border
+    for row in ws_dash.iter_rows(min_row=2, max_col=3, max_row=len(dash_metrics)):
+        for cell in row:
+            cell.border = border
     ws_dash.column_dimensions['A'].width = 30
-    ws_dash.column_dimensions['B'].width = 30
+    ws_dash.column_dimensions['B'].width = 35
     ws_dash.column_dimensions['C'].width = 25
 
     # 2. AI Prompt Adherence Tab

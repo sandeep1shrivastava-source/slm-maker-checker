@@ -15,10 +15,22 @@ if "draft_text" not in st.session_state:
 if "audit_results" not in st.session_state:
     st.session_state.audit_results = None
 
-# Sidebar Configuration
+# Sidebar: Institution & Workflow Configuration
+st.sidebar.header("Institutional Details")
+university_name = st.sidebar.text_input("Name of the University", value="State Open University")
+program_name = st.sidebar.text_input("Program / Discipline", value="Master of Business Administration (MBA)")
+
 st.sidebar.header("Workflow Settings")
 deliverable_type = st.sidebar.selectbox("Deliverable Format", ["Self-Learning Material (SLM)", "Question Bank (QB)"])
 academic_level = st.sidebar.selectbox("Academic Level", ["Postgraduate (PG)", "Undergraduate (UG)"])
+
+# Consolidated metadata bundle
+app_metadata = {
+    "university_name": university_name,
+    "program_name": program_name,
+    "deliverable_type": deliverable_type,
+    "academic_level": academic_level
+}
 
 # Input Section: Dual File Uploader + Fallback Text Areas
 col1, col2 = st.columns(2)
@@ -28,7 +40,6 @@ with col1:
     uploaded_syllabus = st.file_uploader("Upload Syllabus (.docx or .txt)", type=["docx", "txt"], key="syl_file")
     syl_text_input = st.text_area("Or Paste Syllabus Manually", height=150, placeholder="Paste topics or syllabus list here...")
     
-    # Process file or text
     if uploaded_syllabus:
         if uploaded_syllabus.name.endswith(".docx"):
             syllabus_data = extract_text_from_docx(uploaded_syllabus.read())
@@ -43,7 +54,6 @@ with col2:
     uploaded_ref = st.file_uploader("Upload Prescribed References (.docx or .txt)", type=["docx", "txt"], key="ref_file")
     ref_text_input = st.text_area("Or Paste References Manually", height=150, placeholder="Paste textbook extracts or authorized notes...")
     
-    # Process file or text
     if uploaded_ref:
         if uploaded_ref.name.endswith(".docx"):
             reference_data = extract_text_from_docx(uploaded_ref.read())
@@ -77,16 +87,16 @@ if st.session_state.draft_text:
     with st.expander("Preview Content in Markdown", expanded=False):
         st.markdown(st.session_state.draft_text)
 
-    # Independent Maker Download Button
+    # Independent Maker Download Button with metadata header
     maker_docx_bytes = generate_slm_docx(
-        title=f"University {deliverable_type}",
+        title=f"{deliverable_type} Unit Manuscript",
         content_markdown=st.session_state.draft_text,
-        metadata={"deliverable_type": deliverable_type, "academic_level": academic_level}
+        metadata=app_metadata
     )
     st.download_button(
         label=f"Download {deliverable_type} Manuscript (.docx)",
         data=maker_docx_bytes,
-        file_name=f"Generated_{deliverable_type.replace(' ', '_')}.docx",
+        file_name=f"{university_name.replace(' ', '_')}_{deliverable_type.replace(' ', '_')}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
@@ -127,12 +137,12 @@ if st.session_state.audit_results:
     with tab_prompt:
         st.dataframe(res["prompt_adherence_logs"], use_container_width=True)
 
-    # Independent Checker Download Button
-    excel_bytes = build_audit_excel(res)
+    # Independent Checker Download Button with metadata embedded
+    excel_bytes = build_audit_excel(res, metadata=app_metadata)
     st.download_button(
         label="Download Comprehensive Checker Audit Report (.xlsx)",
         data=excel_bytes,
-        file_name=f"Quality_Audit_Report_{deliverable_type.replace(' ', '_')}.xlsx",
+        file_name=f"{university_name.replace(' ', '_')}_Quality_Audit_Report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )
