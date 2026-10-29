@@ -1,26 +1,76 @@
 import json
+import itertools
 from concurrent.futures import ThreadPoolExecutor
 import google.generativeai as genai
 import streamlit as st
 
-MODEL_ID = "gemini-3.8-flash"
+# Multi-model rotation list
+FALLBACK_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-3.8-flash"
+]
 
-def get_gemini_model(system_instruction: str, json_mode: bool = False, temp: float = 0.0):
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+def get_api_key_pool() -> list:
+    """Retrieves all configured API keys from Streamlit secrets."""
+    if "GEMINI_API_KEYS" in st.secrets:
+        keys = st.secrets["GEMINI_API_KEYS"]
+        if isinstance(keys, list):
+            return [k.strip() for k in keys if k.strip()]
+        return [k.strip() for k in str(keys).split(",") if k.strip()]
+    elif "GEMINI_API_KEY" in st.secrets:
+        return [st.secrets["GEMINI_API_KEY"].strip()]
+    return []
+
+def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
+    """
+    Executes generation with 2-dimensional failover:
+    Tries Key 1 -> Key 2 -> Key N across Model 1 -> Model 2 -> Model M.
+    """
+    key_pool = get_api_key_pool()
+    if not key_pool:
+        raise ValueError("No GEMINI_API_KEY or GEMINI_API_KEYS defined in Streamlit secrets.")
+
     cfg = {"temperature": temp}
     if json_mode:
         cfg["response_mime_type"] = "application/json"
-    return genai.GenerativeModel(
-        model_name=MODEL_ID,
-        system_instruction=system_instruction,
-        generation_config=cfg
+
+    last_error = None
+
+    # Outer loop rotates models, inner loop rotates API keys
+    for model_name in FALLBACK_MODELS:
+        for key_idx, active_key in enumerate(key_pool):
+            try:
+                genai.configure(api_key=active_key)
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    system_instruction=system_instruction,
+                    generation_config=cfg
+                )
+                response = model.generate_content(user_payload)
+                return response.text
+
+            except Exception as e:
+                err_str = str(e)
+                last_error = e
+                # Check for rate limit or quota exhaustion (HTTP 429)
+                if "429" in err_str or "quota" in err_str.lower() or "resourceexhausted" in err_str.lower():
+                    # Silently failover to the next key or next model
+                    continue
+                else:
+                    # Non-quota syntax/network errors should raise immediately
+                    raise e
+
+    # If all keys and all models fail:
+    raise RuntimeError(
+        f"All {len(key_pool)} API keys and fallback models exhausted their quota limits. Last error: {last_error}"
     )
 
 # -------------------------------------------------------------
 # STAGE 1: AI MAKER ENGINE (5 Exact Review Formats)
 # -------------------------------------------------------------
 def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: str) -> str:
-    """Routes generation to the exact prompt architecture matching the selected review format."""
     from prompts.academic_formats import MCQ_PROMPT, PPT_PROMPT, FAQS_MISCONCEPTIONS_PROMPT
 
     user_payload = (
@@ -39,14 +89,12 @@ def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: st
     elif deliverable == "FAQs & Misconceptions Review":
         sys_prompt = FAQS_MISCONCEPTIONS_PROMPT
     else:
-        # Default: SLM (Self-Learning Material Quadrant-II)
+        # Default: SLM
         from prompts.maker_prompts import MAKER_SYSTEM_PROMPT, MAKER_USER_TEMPLATE
         sys_prompt = MAKER_SYSTEM_PROMPT
         user_payload = MAKER_USER_TEMPLATE.format(academic_level=level, syllabus=syllabus, reference=reference)
 
-    model = get_gemini_model(sys_prompt, json_mode=False, temp=0.35)
-    response = model.generate_content(user_payload)
-    return response.text
+    return generate_with_resilience(sys_prompt, user_payload, json_mode=False, temp=0.35)
 
 # -------------------------------------------------------------
 # STAGE 2: ACADEMIC QUALITY & SYLLABUS CHECKER
@@ -57,19 +105,17 @@ def run_stage_2_checker(draft: str, syllabus: str, reference: str) -> dict:
 
     def audit_quality():
         payload = f"Syllabus:\n{syllabus}\n\nReferences:\n{reference}\n\nDraft:\n{draft}"
-        model = get_gemini_model(CHECKER_SYSTEM_PROMPT, json_mode=True, temp=0.0)
-        return json.loads(model.generate_content(payload).text)
+        res_text = generate_with_resilience(CHECKER_SYSTEM_PROMPT, payload, json_mode=True, temp=0.0)
+        return json.loads(res_text)
 
     def audit_mapping():
         payload = f"Syllabus:\n{syllabus}\n\nDraft:\n{draft}"
-        model = get_gemini_model(MAPPING_SYSTEM_PROMPT, json_mode=True, temp=0.0)
-        return json.loads(model.generate_content(payload).text)
+        res_text = generate_with_resilience(MAPPING_SYSTEM_PROMPT, payload, json_mode=True, temp=0.0)
+        return json.loads(res_text)
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f_checker = executor.submit(audit_quality)
-        f_mapping = executor.submit(audit_mapping)
-        checker_data = f_checker.result()
-        mapping_data = f_mapping.result()
+    # Run checks sequentially or in parallel with key failover
+    checker_data = audit_quality()
+    mapping_data = audit_mapping()
 
     score = checker_data.get("audit_metadata", {}).get("overall_score", 0.0)
     errors = checker_data.get("error_register", [])
@@ -96,7 +142,7 @@ PROMPT_AUDITOR_SYSTEM = """You are a Principal AI Prompt Compliance Auditor for 
 Perform a strict Meta-Audit on the provided manuscript against generation prompt constraints and guardrails.
 
 EVALUATION PARAMETERS:
-1. Negative Constraints: Detect conversational filler ("Certainly!", "As an AI...", "Here is the unit..."), bracket placeholders ("[Insert diagram]"), or ungrounded claims.
+1. Negative Constraints: Detect conversational filler ("Certainly!", "As an AI..."), bracket placeholders ("[Insert diagram]"), or ungrounded claims.
 2. Section Architecture: Confirm all structural sections are present in sequence without omission.
 3. Bloom's Taxonomy Verbs: Verify whether objectives and question prompts utilize measurable action verbs.
 4. Academic Tone Calibration: Assess whether the delivery is calibrated to higher-education self-learning standards.
@@ -117,7 +163,6 @@ Return ONLY a valid JSON object matching this schema:
 }"""
 
 def run_stage_3_prompt_audit(draft: str, deliverable: str) -> dict:
-    model = get_gemini_model(PROMPT_AUDITOR_SYSTEM, json_mode=True, temp=0.0)
     user_payload = f"Deliverable Format: {deliverable}\n\nDraft Text to Audit:\n{draft}"
-    response = model.generate_content(user_payload)
-    return json.loads(response.text)
+    res_text = generate_with_resilience(PROMPT_AUDITOR_SYSTEM, user_payload, json_mode=True, temp=0.0)
+    return json.loads(res_text)
