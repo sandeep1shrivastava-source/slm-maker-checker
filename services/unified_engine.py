@@ -1,14 +1,12 @@
 import json
-import itertools
-from concurrent.futures import ThreadPoolExecutor
 import google.generativeai as genai
 import streamlit as st
 
-# Multi-model rotation list
+# Priority model rotation list
 FALLBACK_MODELS = [
     "gemini-2.5-flash",
-    "gemini-1.5-flash",
     "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-3.8-flash"
 ]
 
@@ -25,8 +23,8 @@ def get_api_key_pool() -> list:
 
 def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
     """
-    Executes generation with 2-dimensional failover:
-    Tries Key 1 -> Key 2 -> Key N across Model 1 -> Model 2 -> Model M.
+    Executes generation with a 600-second deadline and multi-model/multi-key failover
+    against 429 (Quota), 504 (Deadline Exceeded), and 503 (Service Unavailable).
     """
     key_pool = get_api_key_pool()
     if not key_pool:
@@ -37,10 +35,14 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
         cfg["response_mime_type"] = "application/json"
 
     last_error = None
+    retryable_triggers = [
+        "429", "quota", "resourceexhausted",
+        "504", "deadline", "timed out", "timeout",
+        "503", "unavailable"
+    ]
 
-    # Outer loop rotates models, inner loop rotates API keys
     for model_name in FALLBACK_MODELS:
-        for key_idx, active_key in enumerate(key_pool):
+        for active_key in key_pool:
             try:
                 genai.configure(api_key=active_key)
                 model = genai.GenerativeModel(
@@ -48,24 +50,23 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
                     system_instruction=system_instruction,
                     generation_config=cfg
                 )
-                response = model.generate_content(user_payload)
+                # Explicit 600s timeout prevents 504 Deadline Exceeded during large unit generation
+                response = model.generate_content(
+                    user_payload,
+                    request_options={"timeout": 600.0}
+                )
                 return response.text
 
             except Exception as e:
-                err_str = str(e)
+                err_str = str(e).lower()
                 last_error = e
-                # Check for rate limit or quota exhaustion (HTTP 429)
-                if "429" in err_str or "quota" in err_str.lower() or "resourceexhausted" in err_str.lower():
-                    # Silently failover to the next key or next model
+                # Failover to next key or fallback model if quota or timeout is encountered
+                if any(trigger in err_str for trigger in retryable_triggers):
                     continue
                 else:
-                    # Non-quota syntax/network errors should raise immediately
                     raise e
 
-    # If all keys and all models fail:
-    raise RuntimeError(
-        f"All {len(key_pool)} API keys and fallback models exhausted their quota limits. Last error: {last_error}"
-    )
+    raise RuntimeError(f"All models and keys failed. Last error encountered: {last_error}")
 
 # -------------------------------------------------------------
 # STAGE 1: AI MAKER ENGINE (5 Exact Review Formats)
@@ -113,7 +114,6 @@ def run_stage_2_checker(draft: str, syllabus: str, reference: str) -> dict:
         res_text = generate_with_resilience(MAPPING_SYSTEM_PROMPT, payload, json_mode=True, temp=0.0)
         return json.loads(res_text)
 
-    # Run checks sequentially or in parallel with key failover
     checker_data = audit_quality()
     mapping_data = audit_mapping()
 
