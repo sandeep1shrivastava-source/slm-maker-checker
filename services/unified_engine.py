@@ -11,25 +11,45 @@ FALLBACK_MODELS = [
 ]
 
 def get_api_key_pool() -> list:
-    """Retrieves all configured API keys from Streamlit secrets."""
-    if "GEMINI_API_KEYS" in st.secrets:
-        keys = st.secrets["GEMINI_API_KEYS"]
-        if isinstance(keys, list):
-            return [k.strip() for k in keys if k.strip()]
-        return [k.strip() for k in str(keys).split(",") if k.strip()]
-    elif "GEMINI_API_KEY" in st.secrets:
-        return [st.secrets["GEMINI_API_KEY"].strip()]
-    return []
+    """Safely extracts API keys whether defined as a single string, a list, or comma-separated values."""
+    raw_keys = []
+    for secret_name in ["GEMINI_API_KEYS", "GEMINI_API_KEY"]:
+        if secret_name in st.secrets:
+            val = st.secrets[secret_name]
+            if isinstance(val, (list, tuple)):
+                raw_keys.extend(val)
+            elif isinstance(val, str):
+                if "," in val:
+                    raw_keys.extend(val.split(","))
+                else:
+                    raw_keys.append(val)
+
+    # Flatten nested lists and ensure each key is a stripped string
+    clean_keys = []
+    for k in raw_keys:
+        if isinstance(k, (list, tuple)):
+            for sub_k in k:
+                if isinstance(sub_k, str) and sub_k.strip():
+                    clean_keys.append(sub_k.strip())
+        elif isinstance(k, str) and k.strip():
+            clean_keys.append(k.strip())
+
+    # Remove duplicates while preserving priority order
+    deduped = []
+    for k in clean_keys:
+        if k not in deduped:
+            deduped.append(k)
+
+    if not deduped:
+        raise ValueError("No valid Gemini API key found in Streamlit secrets.")
+    return deduped
 
 def generate_with_resilience(system_instruction: str, user_payload: str, json_mode: bool = False, temp: float = 0.0) -> str:
     """
     Executes generation with streaming to prevent 504 Deadline Exceeded idle timeouts,
-    paired with multi-model failover for 429 quota resilience.
+    paired with multi-model and multi-key failover for 429 quota resilience.
     """
     key_pool = get_api_key_pool()
-    if not key_pool:
-        raise ValueError("No GEMINI_API_KEY or GEMINI_API_KEYS defined in Streamlit secrets.")
-
     cfg = {"temperature": temp}
     if json_mode:
         cfg["response_mime_type"] = "application/json"
@@ -51,7 +71,7 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
                     generation_config=cfg
                 )
                 
-                # Use streaming for non-JSON text to keep the network connection active
+                # Streaming keeps the HTTP connection active during long generations
                 if not json_mode:
                     response = model.generate_content(
                         user_payload,
@@ -91,6 +111,12 @@ def generate_with_resilience(system_instruction: str, user_payload: str, json_mo
 def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: str) -> str:
     from prompts.academic_formats import MCQ_PROMPT, PPT_PROMPT, FAQS_MISCONCEPTIONS_PROMPT
 
+    # Guard against list inputs from document parsers
+    if isinstance(syllabus, list):
+        syllabus = "\n".join(str(s) for s in syllabus)
+    if isinstance(reference, list):
+        reference = "\n".join(str(r) for r in reference)
+
     user_payload = (
         f"Academic Level: {level}\n\n"
         f"Approved Syllabus Outline:\n{syllabus}\n\n"
@@ -120,6 +146,11 @@ def run_stage_1_maker(syllabus: str, reference: str, level: str, deliverable: st
 def run_stage_2_checker(draft: str, syllabus: str, reference: str) -> dict:
     from prompts.checker_prompts import CHECKER_SYSTEM_PROMPT
     from prompts.mapping_prompts import MAPPING_SYSTEM_PROMPT
+
+    if isinstance(syllabus, list):
+        syllabus = "\n".join(str(s) for s in syllabus)
+    if isinstance(reference, list):
+        reference = "\n".join(str(r) for r in reference)
 
     def audit_quality():
         payload = f"Syllabus:\n{syllabus}\n\nReferences:\n{reference}\n\nDraft:\n{draft}"
