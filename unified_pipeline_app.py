@@ -17,7 +17,7 @@ from services.unified_engine import run_stage_1_maker, run_stage_2_checker, run_
 # PAGE CONFIGURATION
 # -------------------------------------------------------------
 st.set_page_config(
-    page_title="Academic Content Pipeline & QA Reviewer",
+    page_title="Academic Content Pipeline & Reviewer",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -80,7 +80,7 @@ def extract_text_safely(file_input) -> str:
     return str(raw_data)
 
 def extract_styles_from_reference(ref_file):
-    """Dynamically detects Font, Size, and Alignment from uploaded reference DOCX."""
+    """Detects font family, font size, and paragraph alignment from reference DOCX."""
     font_name = 'Arial'
     font_size = Pt(11)
     alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -110,7 +110,7 @@ def extract_styles_from_reference(ref_file):
     return font_name, font_size, alignment
 
 # -------------------------------------------------------------
-# STAGE 1: DELIVERABLE MANUSCRIPT DOCX BUILDER
+# STAGE 1: DELIVERABLE MANUSCRIPT DOCX BUILDER (WITH MATCHED STYLING)
 # -------------------------------------------------------------
 def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO:
     doc = Document()
@@ -471,21 +471,40 @@ if "stage3_results" not in st.session_state:
 # SIDEBAR: STRICT AUTHENTICATION GATE
 # ==========================================
 st.sidebar.header("🔐 User Authentication")
-user_email = st.sidebar.text_input("Enter Registered Email ID", value="admin@university.edu").strip().lower()
+user_email = st.sidebar.text_input("Enter Registered Official Email ID", value="admin@university.edu").strip().lower()
 
 is_authorized, user_role = verify_user(user_email)
 
 if not is_authorized:
-    st.sidebar.error("⛔ Access Denied: Unauthorized Email")
+    st.sidebar.error("⛔ Access Denied: Unauthorized Official Email")
     st.warning("Please enter a verified university faculty/admin email address to unlock the pipeline.")
     st.stop()
 
 st.sidebar.success(f"Verified Role: {user_role}")
 
-# Role-Based Permissions
-can_run_maker = user_role in ["Lead Administrator", "Content Author (Maker)"]
-can_run_checker = user_role in ["Lead Administrator", "SME Quality Reviewer (Checker)"]
-can_run_auditor = user_role in ["Lead Administrator", "Prompt Compliance Auditor"]
+# -------------------------------------------------------------
+# CONSOLIDATED TEAM PERMISSIONS
+# -------------------------------------------------------------
+# Maker Team: Unlocks Stage 1 only
+# Reviewer Team: Unlocks Stage 2 (Quality Checker) AND Stage 3 (Prompt Auditor)
+# Lead Admin: Unlocks all stages + Admin console
+can_run_maker = user_role in [
+    "Lead Administrator",
+    "Content Author (Maker Team)",
+    "Content Author (Maker)"
+]
+
+can_run_checker = user_role in [
+    "Lead Administrator",
+    "Academic Reviewer (Checker & Auditor Team)",
+    "SME Quality Reviewer (Checker)"
+]
+
+can_run_auditor = user_role in [
+    "Lead Administrator",
+    "Academic Reviewer (Checker & Auditor Team)",
+    "Prompt Compliance Auditor"
+]
 
 # ==========================================
 # SIDEBAR: ADMIN CONSOLE (Lead Administrator Only)
@@ -506,40 +525,38 @@ if user_role == "Lead Administrator":
                 st.warning("Enter a valid university name.")
 
         st.divider()
-        st.markdown("##### 👤 Manage User Roles & Logins")
-        new_user_email = st.text_input("Faculty / User Email", placeholder="e.g., reviewer@university.edu", key="admin_add_user_email")
+        st.markdown("##### 👤 Manage Team Roles & Logins")
+        new_user_email = st.text_input("Official Faculty / Staff Email", placeholder="e.g., faculty@university.edu", key="admin_add_user_email")
         new_user_role = st.selectbox(
-            "Assign Role",
+            "Assign Team Role",
             [
-                "Content Author (Maker)",
-                "SME Quality Reviewer (Checker)",
-                "Prompt Compliance Auditor",
+                "Content Author (Maker Team)",
+                "Academic Reviewer (Checker & Auditor Team)",
                 "Lead Administrator"
             ],
             key="admin_add_user_role_select"
         )
-        if st.button("➕ Save User Permission", use_container_width=True):
+        if st.button("➕ Save Team Permission", use_container_width=True):
             if new_user_email.strip():
                 try:
                     assign_user_role(new_user_email.strip().lower(), new_user_role)
-                    st.success(f"Permission saved for {new_user_email.strip()} as {new_user_role}")
+                    st.success(f"Role saved for {new_user_email.strip()} as '{new_user_role}'")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Failed to assign role: {e}")
             else:
-                st.warning("Enter a valid email address.")
+                st.warning("Enter a valid official email address.")
 
         if isinstance(access_cfg, dict):
             with st.popover("📋 View Registered Directory"):
                 st.markdown("**Registered Universities:**")
                 st.write(access_cfg.get("universities", []))
-                st.markdown("**Authorized Users:**")
+                st.markdown("**Authorized User Directory:**")
                 st.write(access_cfg.get("users", {}))
 
 st.sidebar.divider()
 st.sidebar.header("🏛️ Institutional Scope")
 
-# Populate dynamic universities from updated access_cfg
 known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
 if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
     known_unis = access_cfg["universities"]
@@ -604,6 +621,18 @@ with col2:
 st.divider()
 
 # -------------------------------------------------------------
+# 3. CREATIVE CONTENT INJECTION (Maker Scope)
+# -------------------------------------------------------------
+st.subheader("3. Creative Direction & Customization (Maker Scope)")
+creative_instructions = st.text_area(
+    "Add Creative Content, Case Studies, or Custom Guidelines (Optional)",
+    placeholder="E.g., Include a real-world startup case study, or structure key takeaways around role-play activities...",
+    height=80
+)
+
+st.divider()
+
+# -------------------------------------------------------------
 # SEQUENTIAL PIPELINE CONTROLS
 # -------------------------------------------------------------
 st.subheader("Sequential Pipeline Execution")
@@ -616,7 +645,7 @@ with btn_col1:
         "Step 1: Run AI Maker",
         type="primary",
         disabled=(not can_run_maker),
-        help="Execute AI drafting" if can_run_maker else "Restricted by Role-Based Access Control",
+        help="Execute AI drafting (Maker Team)" if can_run_maker else "Restricted to Maker Team / Admin",
         use_container_width=True
     )
 
@@ -625,7 +654,7 @@ with btn_col2:
     run_checker = st.button(
         "Step 2: Run Academic Audit",
         disabled=(not can_run_checker or not bool(st.session_state.draft_text)),
-        help="Execute Academic QA Audit" if can_run_checker else "Restricted by Role-Based Access Control",
+        help="Execute Academic QA Audit (Reviewer Team)" if can_run_checker else "Restricted to Reviewer Team / Admin",
         use_container_width=True
     )
 
@@ -634,7 +663,7 @@ with btn_col3:
     run_auditor = st.button(
         "Step 3: Run Prompt Audit",
         disabled=(not can_run_auditor or not bool(st.session_state.draft_text)),
-        help="Execute Deep Prompt Meta-Audit" if can_run_auditor else "Restricted by Role-Based Access Control",
+        help="Execute Deep Prompt Meta-Audit (Reviewer Team)" if can_run_auditor else "Restricted to Reviewer Team / Admin",
         use_container_width=True
     )
 
@@ -645,8 +674,12 @@ if run_maker:
     else:
         with st.spinner("Stage 1 generation in progress (streaming enabled)..."):
             try:
+                final_syllabus = syllabus_text
+                if creative_instructions.strip():
+                    final_syllabus += f"\n\n[AUTHOR CREATIVE DIRECTIONS TO INTEGRATE]:\n{creative_instructions.strip()}"
+
                 draft = run_stage_1_maker(
-                    syllabus=syllabus_text,
+                    syllabus=final_syllabus,
                     reference=ref_text,
                     level=selected_level,
                     deliverable=selected_deliverable
@@ -730,7 +763,6 @@ if st.session_state.stage2_results:
     else:
         st.warning(f"Audit Status: {status_dec} — Revision recommended before publishing.")
 
-    # 12 QA Parameter Compliance Matrix Preview
     with st.expander("📋 View 12-Parameter Academic Quality Matrix", expanded=True):
         matrix_display = []
         errs = s2.get("error_register", [])
