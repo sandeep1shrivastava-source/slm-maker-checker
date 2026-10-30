@@ -10,7 +10,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
 # Modular Project Services
-from services.access_manager import load_access_config, verify_user
+from services.access_manager import load_access_config, verify_user, add_university, assign_user_role
 from services.unified_engine import run_stage_1_maker, run_stage_2_checker, run_stage_3_prompt_audit
 
 # -------------------------------------------------------------
@@ -81,7 +81,6 @@ def extract_text_safely(file_input) -> str:
 
 def extract_styles_from_reference(ref_file):
     """Dynamically detects Font, Size, and Alignment from uploaded reference DOCX."""
-    # Defaults
     font_name = 'Arial'
     font_size = Pt(11)
     alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -91,10 +90,10 @@ def extract_styles_from_reference(ref_file):
         
     try:
         raw_data = ref_file.getvalue() if hasattr(ref_file, "getvalue") else ref_file.read()
-        if hasattr(ref_file, "seek"): ref_file.seek(0)
+        if hasattr(ref_file, "seek"): 
+            ref_file.seek(0)
         
         ref_doc = Document(io.BytesIO(raw_data))
-        # Inspect paragraphs to mirror user formatting
         for p in ref_doc.paragraphs:
             if p.text.strip():
                 if p.alignment is not None:
@@ -115,11 +114,8 @@ def extract_styles_from_reference(ref_file):
 # -------------------------------------------------------------
 def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO:
     doc = Document()
-    
-    # Extract formatting from user's reference file
     font_name, font_size, user_alignment = extract_styles_from_reference(ref_file)
     
-    # Set default style for the entire generated document
     style = doc.styles['Normal']
     style.font.name = font_name
     style.font.size = font_size
@@ -141,7 +137,7 @@ def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO
     for block in content.split("\n\n"):
         if block.strip():
             p = doc.add_paragraph(block.strip())
-            p.alignment = user_alignment # Apply mapped alignment (e.g. Justified)
+            p.alignment = user_alignment
 
     stream = io.BytesIO()
     doc.save(stream)
@@ -152,16 +148,15 @@ def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO
 # REALISTIC QA SCORING LOGIC
 # -------------------------------------------------------------
 def calculate_realistic_score(weight: float, related_errors: list) -> float:
-    """Calculates achieved score dynamically based on AI error severities."""
     score = float(weight)
     for e in related_errors:
         sev = str(e.get("severity", "")).lower()
         if "critical" in sev:
-            score -= (weight * 0.40) # Deduct 40% for critical
+            score -= (weight * 0.40)
         elif "high" in sev or "major" in sev:
-            score -= (weight * 0.20) # Deduct 20% for major
+            score -= (weight * 0.20)
         else:
-            score -= (weight * 0.10) # Deduct 10% for minor
+            score -= (weight * 0.10)
     return max(0.0, round(score, 1))
 
 # -------------------------------------------------------------
@@ -194,8 +189,6 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
         matrix_rows = []
         for p in QA_12_PARAMETERS:
             related = [e for e in errs if p["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in p["name"].lower()]
-            
-            # Use realistic scoring calculation
             achieved = calculate_realistic_score(p["weight"], related)
             percent_achieved = round((achieved / p["weight"]) * 100, 1)
 
@@ -325,7 +318,6 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     errs = stage2_data.get("error_register", [])
     for param in QA_12_PARAMETERS:
         related_errs = [e for e in errs if param["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in param["name"].lower()]
-        
         achieved = calculate_realistic_score(param["weight"], related_errs)
         pct = round((achieved / param["weight"]) * 100, 1)
 
@@ -490,15 +482,66 @@ if not is_authorized:
 
 st.sidebar.success(f"Verified Role: {user_role}")
 
+# Role-Based Permissions
 can_run_maker = user_role in ["Lead Administrator", "Content Author (Maker)"]
 can_run_checker = user_role in ["Lead Administrator", "SME Quality Reviewer (Checker)"]
 can_run_auditor = user_role in ["Lead Administrator", "Prompt Compliance Auditor"]
 
+# ==========================================
+# SIDEBAR: ADMIN CONSOLE (Lead Administrator Only)
+# ==========================================
+if user_role == "Lead Administrator":
+    with st.sidebar.expander("🛠️ Admin Console (Institutions & Users)", expanded=False):
+        st.markdown("##### 🏛️ Add University")
+        new_uni_name = st.text_input("University Name", placeholder="e.g., Apex Global University", key="admin_add_uni_input")
+        if st.button("➕ Register University", use_container_width=True):
+            if new_uni_name.strip():
+                try:
+                    add_university(new_uni_name.strip())
+                    st.success(f"Registered: {new_uni_name.strip()}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to add university: {e}")
+            else:
+                st.warning("Enter a valid university name.")
+
+        st.divider()
+        st.markdown("##### 👤 Manage User Roles & Logins")
+        new_user_email = st.text_input("Faculty / User Email", placeholder="e.g., reviewer@university.edu", key="admin_add_user_email")
+        new_user_role = st.selectbox(
+            "Assign Role",
+            [
+                "Content Author (Maker)",
+                "SME Quality Reviewer (Checker)",
+                "Prompt Compliance Auditor",
+                "Lead Administrator"
+            ],
+            key="admin_add_user_role_select"
+        )
+        if st.button("➕ Save User Permission", use_container_width=True):
+            if new_user_email.strip():
+                try:
+                    assign_user_role(new_user_email.strip().lower(), new_user_role)
+                    st.success(f"Permission saved for {new_user_email.strip()} as {new_user_role}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to assign role: {e}")
+            else:
+                st.warning("Enter a valid email address.")
+
+        if isinstance(access_cfg, dict):
+            with st.popover("📋 View Registered Directory"):
+                st.markdown("**Registered Universities:**")
+                st.write(access_cfg.get("universities", []))
+                st.markdown("**Authorized Users:**")
+                st.write(access_cfg.get("users", {}))
+
 st.sidebar.divider()
 st.sidebar.header("🏛️ Institutional Scope")
 
+# Populate dynamic universities from updated access_cfg
 known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
-if isinstance(access_cfg, dict) and "universities" in access_cfg:
+if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
     known_unis = access_cfg["universities"]
 
 selected_university = st.sidebar.selectbox("Select University", known_unis, index=0)
@@ -655,7 +698,6 @@ if st.session_state.draft_text:
     with st.expander("📄 Click to Preview Generated Manuscript", expanded=True):
         st.markdown(st.session_state.draft_text)
 
-    # Pass the user's uploaded reference file to extract its styles
     manuscript_docx = build_manuscript_docx(
         title=f"{selected_university} - {selected_deliverable}",
         content=st.session_state.draft_text,
