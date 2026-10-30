@@ -12,6 +12,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 # Modular Project Services
 from services.access_manager import load_access_config, verify_user, add_university, assign_user_role
 from services.unified_engine import run_stage_1_maker, run_stage_2_checker, run_stage_3_prompt_audit
+from services.depository_manager import list_manuscripts, park_manuscript, update_manuscript_review
 
 # -------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -161,7 +162,7 @@ def calculate_realistic_score(weight: float, related_errors: list) -> float:
 # -------------------------------------------------------------
 # STAGE 2: 12-QA EXCEL WORKBOOK GENERATOR
 # -------------------------------------------------------------
-def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deliverable: str) -> io.BytesIO:
+def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deliverable: str, batch: str = "", semester_year: str = "") -> io.BytesIO:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         score = stage2_data.get("score", 92.0)
@@ -173,6 +174,8 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
             ["PARAMETER / FIELD", "METRIC / VALUE"],
             ["Institution / Governing University", university],
             ["Academic Program / Discipline", program],
+            ["Batch / Cohort", batch or "N/A"],
+            ["Academic Term / Semester", semester_year or "N/A"],
             ["Deliverable Format Under Review", deliverable],
             ["Audit Framework Standard", "12-Parameter Academic Quality Assurance Framework"],
             ["Overall QA Quality Score", f"{score} / 100"],
@@ -252,7 +255,7 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
 # -------------------------------------------------------------
 # STAGE 2: ACADEMIC QUALITY REVIEW REPORT DOCX BUILDER
 # -------------------------------------------------------------
-def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliverable: str) -> io.BytesIO:
+def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliverable: str, batch: str = "", semester_year: str = "") -> io.BytesIO:
     doc = Document()
     for s in doc.sections:
         s.top_margin = Inches(0.8)
@@ -268,14 +271,14 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub_p = doc.add_paragraph()
-    r_sub = sub_p.add_run("Stage 2 SME Quality & 12-Parameter Pedagogical Audit Dossier")
+    r_sub = sub_p.add_run(f"Stage 2 SME Quality & 12-Parameter Pedagogical Audit | {batch} ({semester_year})")
     r_sub.font.size = Pt(10)
     r_sub.font.italic = True
     sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph("―" * 55)
 
-    meta_tbl = doc.add_table(rows=3, cols=2)
+    meta_tbl = doc.add_table(rows=4, cols=2)
     meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     score = stage2_data.get("score", 0.0)
     cov = stage2_data.get("coverage_pct", 0.0)
@@ -286,8 +289,10 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     meta_tbl.rows[0].cells[1].text = f"Verification Status: {dec}"
     meta_tbl.rows[1].cells[0].text = f"Academic Program: {program}"
     meta_tbl.rows[1].cells[1].text = f"Quality Audit Score: {score} / 100"
-    meta_tbl.rows[2].cells[0].text = f"Deliverable Format: {deliverable}"
-    meta_tbl.rows[2].cells[1].text = f"Syllabus Coverage: {cov}% (Critical Errors: {crit})"
+    meta_tbl.rows[2].cells[0].text = f"Batch / Cohort: {batch}"
+    meta_tbl.rows[2].cells[1].text = f"Academic Term: {semester_year}"
+    meta_tbl.rows[3].cells[0].text = f"Deliverable Format: {deliverable}"
+    meta_tbl.rows[3].cells[1].text = f"Syllabus Coverage: {cov}% (Critical Errors: {crit})"
 
     doc.add_paragraph("")
 
@@ -368,7 +373,7 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
 # -------------------------------------------------------------
 # STAGE 3: PROMPT AUDITOR DOCX BUILDER
 # -------------------------------------------------------------
-def build_prompt_audit_docx(audit_data: dict, deliverable_type: str = "SLM", university: str = "State Open University", program: str = "MBA") -> io.BytesIO:
+def build_prompt_audit_docx(audit_data: dict, deliverable_type: str = "SLM", university: str = "State Open University", program: str = "MBA", batch: str = "", semester_year: str = "") -> io.BytesIO:
     doc = Document()
     for s in doc.sections:
         s.top_margin = Inches(0.8)
@@ -384,19 +389,21 @@ def build_prompt_audit_docx(audit_data: dict, deliverable_type: str = "SLM", uni
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub_p = doc.add_paragraph()
-    sub_run = sub_p.add_run(f"Stage 3 Deep Meta-Audit Dossier | Deliverable: {deliverable_type}")
+    sub_run = sub_p.add_run(f"Stage 3 Meta-Audit Dossier | {university} - {program} | {batch} ({semester_year})")
     sub_run.font.size = Pt(10)
     sub_run.font.italic = True
     sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph("―" * 55)
 
-    meta_tbl = doc.add_table(rows=2, cols=2)
+    meta_tbl = doc.add_table(rows=3, cols=2)
     meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
     meta_tbl.rows[0].cells[0].text = f"University: {university}"
     meta_tbl.rows[0].cells[1].text = f"Audit Status: {audit_data.get('overall_compliance_status', 'COMPLIANT')}"
     meta_tbl.rows[1].cells[0].text = f"Academic Program: {program}"
     meta_tbl.rows[1].cells[1].text = f"Prompt Score: {audit_data.get('prompt_score', 0.0)} / 100"
+    meta_tbl.rows[2].cells[0].text = f"Batch: {batch}"
+    meta_tbl.rows[2].cells[1].text = f"Term: {semester_year}"
 
     doc.add_paragraph("")
 
@@ -465,6 +472,14 @@ if "stage2_results" not in st.session_state:
     st.session_state.stage2_results = None
 if "stage3_results" not in st.session_state:
     st.session_state.stage3_results = None
+if "loaded_manuscript_id" not in st.session_state:
+    st.session_state.loaded_manuscript_id = None
+
+# Active loaded metadata tracking
+if "active_batch" not in st.session_state:
+    st.session_state.active_batch = "Batch 2026-A"
+if "active_term" not in st.session_state:
+    st.session_state.active_term = "Semester 1"
 
 # ==========================================
 # SIDEBAR: STRICT AUTHENTICATION GATE (@upgrad.com ENFORCED)
@@ -567,7 +582,7 @@ if user_role == "Lead Administrator":
                 st.write(access_cfg.get("users", {}))
 
 st.sidebar.divider()
-st.sidebar.header("🏛️ Institutional Scope")
+st.sidebar.header("🏛️ Institutional Scope & Cohort Mapping")
 
 known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
 if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
@@ -586,6 +601,23 @@ selected_program = st.sidebar.selectbox(
     index=0
 )
 
+# University-Programme-Batch-Year/Semester Scope Inputs
+selected_batch = st.sidebar.text_input(
+    "Batch / Cohort", 
+    value=st.session_state.active_batch, 
+    placeholder="e.g., Cohort 14 (Jan 2026)"
+)
+
+selected_term = st.sidebar.selectbox(
+    "Year / Semester",
+    [
+        "Semester 1", "Semester 2", "Semester 3", "Semester 4", 
+        "Semester 5", "Semester 6", "Year 1", "Year 2", "Year 3", 
+        "Executive Term 1", "Executive Term 2"
+    ],
+    index=0
+)
+
 selected_deliverable = st.sidebar.selectbox(
     "Deliverable Format",
     ["SLM", "PPT", "Question Bank", "MCQ", "FAQs & Misconceptions Review"],
@@ -599,10 +631,120 @@ selected_level = st.sidebar.selectbox(
 )
 
 # -------------------------------------------------------------
-# MAIN APP HEADER & INPUT INGESTION
+# MAIN APP HEADER & HIERARCHICAL DEPOSITORY
 # -------------------------------------------------------------
 st.title("University Unified 3-Tier Academic Content & Audit Pipeline")
 st.caption("Layered Execution: AI Maker (1) ➔ Academic QA Checker (2) ➔ Deep Prompt Auditor (3)")
+
+# --- HIERARCHICAL DEPOSITORY & AUDIT QUEUE ---
+all_manuscripts = list_manuscripts()
+
+with st.expander("📚 Shared Depository: Search by University ➔ Programme ➔ Batch ➔ Year/Semester", expanded=can_run_checker):
+    st.markdown("##### 🔍 Depository Hierarchy Filter")
+    
+    # Filter Row
+    f_col1, f_col2, f_col3, f_col4, f_col5 = st.columns(5)
+    
+    all_unis = sorted(list(set([m.get("university", "") for m in all_manuscripts if m.get("university")])))
+    all_progs = sorted(list(set([m.get("program", "") for m in all_manuscripts if m.get("program")])))
+    all_batches = sorted(list(set([m.get("batch", "") for m in all_manuscripts if m.get("batch")])))
+    all_terms = sorted(list(set([m.get("semester_year", "") for m in all_manuscripts if m.get("semester_year")])))
+
+    with f_col1:
+        filter_uni = st.selectbox("1. Filter University", ["All Universities"] + all_unis)
+    with f_col2:
+        filter_prog = st.selectbox("2. Filter Programme", ["All Programmes"] + all_progs)
+    with f_col3:
+        filter_batch = st.selectbox("3. Filter Batch", ["All Batches"] + all_batches)
+    with f_col4:
+        filter_term = st.selectbox("4. Filter Year/Sem", ["All Terms"] + all_terms)
+    with f_col5:
+        filter_status = st.selectbox("5. Filter Status", ["All Statuses", "Pending Review", "PASS", "REVISE"])
+
+    # Apply filters dynamically
+    filtered_manuscripts = all_manuscripts
+    if filter_uni != "All Universities":
+        filtered_manuscripts = [m for m in filtered_manuscripts if m.get("university") == filter_uni]
+    if filter_prog != "All Programmes":
+        filtered_manuscripts = [m for m in filtered_manuscripts if m.get("program") == filter_prog]
+    if filter_batch != "All Batches":
+        filtered_manuscripts = [m for m in filtered_manuscripts if m.get("batch") == filter_batch]
+    if filter_term != "All Terms":
+        filtered_manuscripts = [m for m in filtered_manuscripts if m.get("semester_year") == filter_term]
+    if filter_status != "All Statuses":
+        filtered_manuscripts = [m for m in filtered_manuscripts if m.get("status") == filter_status]
+
+    st.divider()
+
+    # Dropdown to load specific manuscript
+    dep_col1, dep_col2 = st.columns([3, 1])
+    with dep_col1:
+        if filtered_manuscripts:
+            dep_options = {
+                f"[{m.get('status', 'Pending')}] {m.get('university')} ➔ {m.get('program')} ➔ {m.get('batch')} ➔ {m.get('semester_year')} ➔ {m.get('deliverable')} (Author: {m.get('author_email')})": m.get("id")
+                for m in filtered_manuscripts
+            }
+            selected_dep_label = st.selectbox("Select Filtered Manuscript from Depository:", list(dep_options.keys()))
+            selected_dep_id = dep_options[selected_dep_label]
+        else:
+            st.info("No manuscripts match the selected University / Programme / Batch / Semester filters.")
+            selected_dep_id = None
+
+    with dep_col2:
+        st.write("")
+        st.write("")
+        if st.button("📥 Load Manuscript for Audit", disabled=(selected_dep_id is None), use_container_width=True):
+            chosen = next((m for m in all_manuscripts if m["id"] == selected_dep_id), None)
+            if chosen:
+                st.session_state.draft_text = chosen.get("draft_text", "")
+                st.session_state.loaded_manuscript_id = chosen["id"]
+                st.session_state.stage2_results = chosen.get("stage2_results")
+                st.session_state.stage3_results = chosen.get("stage3_results")
+                st.session_state.active_batch = chosen.get("batch", "General Batch")
+                st.session_state.active_term = chosen.get("semester_year", "Semester 1")
+                st.session_state.stage = "STAGE_1_COMPLETE"
+                st.success(f"Loaded '{chosen.get('program')} - {chosen.get('batch')}' into workspace! Stages 2 & 3 are unlocked.")
+                st.rerun()
+
+    # Detailed Summary Table
+    if all_manuscripts:
+        dep_summary_table = [
+            {
+                "ID": m["id"],
+                "University": m.get("university"),
+                "Programme": m.get("program"),
+                "Batch / Cohort": m.get("batch"),
+                "Year / Sem": m.get("semester_year"),
+                "Deliverable": m.get("deliverable", "SLM"),
+                "Author (@upgrad.com)": m.get("author_email"),
+                "Date Created": m.get("created_at"),
+                "Audit Status": m.get("status", "Pending Review"),
+                "Reviewer": m.get("reviewer_email", "Unassigned")
+            }
+            for m in filtered_manuscripts
+        ]
+        st.dataframe(pd.DataFrame(dep_summary_table), use_container_width=True)
+
+st.divider()
+
+# -------------------------------------------------------------
+# WORKSPACE INPUTS: DUAL MODE (LIVE MAKER OR DIRECT DOCX UPLOAD)
+# -------------------------------------------------------------
+st.subheader("Workspace Content & Input Ingestion")
+
+# Option for Reviewers to upload older offline docx directly
+direct_draft_upload = None
+if can_run_checker:
+    with st.expander("📂 Independent Reviewer Mode: Upload Existing Older DOCX Draft Directly (Optional)", expanded=False):
+        st.caption("Upload a pre-existing manuscript (.docx) to immediately audit without waiting for a Maker.")
+        direct_draft_upload = st.file_uploader("Upload Maker's DOCX Draft Directly", type=["docx"], key="direct_draft_uploader")
+        if direct_draft_upload:
+            uploaded_draft_text = extract_text_safely(direct_draft_upload)
+            if uploaded_draft_text.strip():
+                st.session_state.draft_text = uploaded_draft_text
+                st.session_state.loaded_manuscript_id = None
+                st.session_state.stage = "STAGE_1_COMPLETE"
+                st.success(f"Successfully loaded '{direct_draft_upload.name}'! Stage 2 and Stage 3 are now active.")
 
 col1, col2 = st.columns(2)
 
@@ -697,6 +839,7 @@ if run_maker:
                     deliverable=selected_deliverable
                 )
                 st.session_state.draft_text = draft
+                st.session_state.loaded_manuscript_id = None
                 st.session_state.stage2_results = None
                 st.session_state.stage3_results = None
                 st.session_state.stage = "STAGE_1_COMPLETE"
@@ -715,6 +858,14 @@ if run_checker:
             )
             st.session_state.stage2_results = res_checker
             st.session_state.stage = "STAGE_2_COMPLETE"
+            
+            # Sync review results with depository record
+            if st.session_state.loaded_manuscript_id:
+                update_manuscript_review(
+                    item_id=st.session_state.loaded_manuscript_id,
+                    reviewer_email=user_email,
+                    stage2_results=res_checker
+                )
             st.success("Stage 2 Academic Quality Audit Complete!")
         except Exception as e:
             st.error(f"Checker Failed: {e}")
@@ -729,6 +880,14 @@ if run_auditor:
             )
             st.session_state.stage3_results = res_auditor
             st.session_state.stage = "STAGE_3_COMPLETE"
+            
+            # Sync Stage 3 results with depository record
+            if st.session_state.loaded_manuscript_id:
+                update_manuscript_review(
+                    item_id=st.session_state.loaded_manuscript_id,
+                    reviewer_email=user_email,
+                    stage3_results=res_auditor
+                )
             st.success("Stage 3 Prompt Compliance Audit Complete!")
         except Exception as e:
             st.error(f"Auditor Failed: {e}")
@@ -736,22 +895,47 @@ if run_auditor:
 st.divider()
 
 # -------------------------------------------------------------
-# STAGE 1 RESULTS & MANUSCRIPT EXPORT
+# STAGE 1 RESULTS & DEPOSITORY PARKING
 # -------------------------------------------------------------
 if st.session_state.draft_text:
     st.subheader(f"Stage 1 Deliverable: {selected_deliverable} Manuscript")
+    
+    # Parking Action Row
+    park_col1, park_col2 = st.columns([3, 1])
+    with park_col1:
+        st.caption(f"Target Scope: **{selected_university}** ➔ **{selected_program}** ➔ **{selected_batch}** ➔ **{selected_term}**")
+    with park_col2:
+        if can_run_maker:
+            if st.button("💾 Park to Depository for Review", type="primary", use_container_width=True):
+                new_id = park_manuscript(
+                    title=f"{selected_university} | {selected_program} | {selected_batch} | {selected_term} - {selected_deliverable}",
+                    author_email=user_email,
+                    university=selected_university,
+                    program=selected_program,
+                    batch=selected_batch,
+                    semester_year=selected_term,
+                    deliverable=selected_deliverable,
+                    level=selected_level,
+                    syllabus_text=syllabus_text,
+                    ref_text=ref_text,
+                    draft_text=st.session_state.draft_text
+                )
+                st.session_state.loaded_manuscript_id = new_id
+                st.success(f"Parked successfully! Depository ID: {new_id}. Reviewers can now locate this by batch & semester.")
+                st.rerun()
+
     with st.expander("📄 Click to Preview Generated Manuscript", expanded=True):
         st.markdown(st.session_state.draft_text)
 
     manuscript_docx = build_manuscript_docx(
-        title=f"{selected_university} - {selected_deliverable}",
+        title=f"{selected_university} - {selected_program} ({selected_batch} / {selected_term})",
         content=st.session_state.draft_text,
         ref_file=uploaded_ref
     )
     st.download_button(
         label=f"📥 Download {selected_deliverable} Manuscript (.DOCX)",
         data=manuscript_docx,
-        file_name=f"{selected_program}_{selected_deliverable}_Manuscript.docx",
+        file_name=f"{selected_program}_{selected_batch}_{selected_term}_{selected_deliverable}.docx".replace(" ", "_"),
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
@@ -780,7 +964,6 @@ if st.session_state.stage2_results:
         errs = s2.get("error_register", [])
         for p in QA_12_PARAMETERS:
             related = [e for e in errs if p["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in p["name"].lower()]
-            
             achieved = calculate_realistic_score(p["weight"], related)
             percent_achieved = round((achieved / p["weight"]) * 100, 1)
 
@@ -809,12 +992,14 @@ if st.session_state.stage2_results:
             stage2_data=s2,
             university=selected_university,
             program=selected_program,
-            deliverable=selected_deliverable
+            deliverable=selected_deliverable,
+            batch=selected_batch,
+            semester_year=selected_term
         )
         st.download_button(
             label="📄 Download Stage 2 QA Review Report (.DOCX)",
             data=s2_docx_stream,
-            file_name=f"{selected_program}_{selected_deliverable}_QA_Review_Report.docx",
+            file_name=f"{selected_program}_{selected_batch}_{selected_term}_QA_Review_Report.docx".replace(" ", "_"),
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             type="primary",
             use_container_width=True
@@ -825,12 +1010,14 @@ if st.session_state.stage2_results:
             stage2_data=s2,
             university=selected_university,
             program=selected_program,
-            deliverable=selected_deliverable
+            deliverable=selected_deliverable,
+            batch=selected_batch,
+            semester_year=selected_term
         )
         st.download_button(
             label="📊 Download 12-QA Evaluation Report (.XLSX)",
             data=s2_excel_stream,
-            file_name=f"{selected_program}_{selected_deliverable}_12_QA_Report.xlsx",
+            file_name=f"{selected_program}_{selected_batch}_{selected_term}_12_QA_Report.xlsx".replace(" ", "_"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
@@ -860,12 +1047,14 @@ if st.session_state.stage3_results:
         audit_data=s3,
         deliverable_type=selected_deliverable,
         university=selected_university,
-        program=selected_program
+        program=selected_program,
+        batch=selected_batch,
+        semester_year=selected_term
     )
     st.download_button(
         label="📄 Download Stage 3 Prompt Audit Report (.DOCX)",
         data=docx_stream,
-        file_name=f"{selected_program}_{selected_deliverable}_Prompt_Audit_Report.docx",
+        file_name=f"{selected_program}_{selected_batch}_{selected_term}_Prompt_Audit_Report.docx".replace(" ", "_"),
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         type="primary",
         use_container_width=True
