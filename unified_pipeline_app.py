@@ -42,10 +42,9 @@ QA_12_PARAMETERS = [
 ]
 
 # -------------------------------------------------------------
-# SAFE DOCUMENT EXTRACTION
+# SAFE DOCUMENT EXTRACTION & FORMAT DETECTION
 # -------------------------------------------------------------
 def extract_text_safely(file_input) -> str:
-    """Extracts raw text safely from uploaded files, raw bytes, or text buffers without crashing."""
     if file_input is None:
         return ""
     fname = getattr(file_input, "name", "").lower()
@@ -80,11 +79,51 @@ def extract_text_safely(file_input) -> str:
             return raw_data.decode("latin-1", errors="ignore")
     return str(raw_data)
 
+def extract_styles_from_reference(ref_file):
+    """Dynamically detects Font, Size, and Alignment from uploaded reference DOCX."""
+    # Defaults
+    font_name = 'Arial'
+    font_size = Pt(11)
+    alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    
+    if not ref_file or not getattr(ref_file, "name", "").lower().endswith(".docx"):
+        return font_name, font_size, alignment
+        
+    try:
+        raw_data = ref_file.getvalue() if hasattr(ref_file, "getvalue") else ref_file.read()
+        if hasattr(ref_file, "seek"): ref_file.seek(0)
+        
+        ref_doc = Document(io.BytesIO(raw_data))
+        # Inspect paragraphs to mirror user formatting
+        for p in ref_doc.paragraphs:
+            if p.text.strip():
+                if p.alignment is not None:
+                    alignment = p.alignment
+                for r in p.runs:
+                    if r.font.name:
+                        font_name = r.font.name
+                    if r.font.size:
+                        font_size = r.font.size
+                break
+    except Exception:
+        pass
+        
+    return font_name, font_size, alignment
+
 # -------------------------------------------------------------
 # STAGE 1: DELIVERABLE MANUSCRIPT DOCX BUILDER
 # -------------------------------------------------------------
-def build_manuscript_docx(title: str, content: str) -> io.BytesIO:
+def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO:
     doc = Document()
+    
+    # Extract formatting from user's reference file
+    font_name, font_size, user_alignment = extract_styles_from_reference(ref_file)
+    
+    # Set default style for the entire generated document
+    style = doc.styles['Normal']
+    style.font.name = font_name
+    style.font.size = font_size
+
     for s in doc.sections:
         s.top_margin = Inches(1.0)
         s.bottom_margin = Inches(1.0)
@@ -94,18 +133,36 @@ def build_manuscript_docx(title: str, content: str) -> io.BytesIO:
     p_title = doc.add_paragraph()
     r_title = p_title.add_run(title)
     r_title.bold = True
-    r_title.font.size = Pt(18)
+    r_title.font.size = Pt(16)
     r_title.font.color.rgb = RGBColor(0, 51, 102)
+    p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     doc.add_paragraph("―" * 50)
     for block in content.split("\n\n"):
         if block.strip():
-            doc.add_paragraph(block.strip())
+            p = doc.add_paragraph(block.strip())
+            p.alignment = user_alignment # Apply mapped alignment (e.g. Justified)
 
     stream = io.BytesIO()
     doc.save(stream)
     stream.seek(0)
     return stream
+
+# -------------------------------------------------------------
+# REALISTIC QA SCORING LOGIC
+# -------------------------------------------------------------
+def calculate_realistic_score(weight: float, related_errors: list) -> float:
+    """Calculates achieved score dynamically based on AI error severities."""
+    score = float(weight)
+    for e in related_errors:
+        sev = str(e.get("severity", "")).lower()
+        if "critical" in sev:
+            score -= (weight * 0.40) # Deduct 40% for critical
+        elif "high" in sev or "major" in sev:
+            score -= (weight * 0.20) # Deduct 20% for major
+        else:
+            score -= (weight * 0.10) # Deduct 10% for minor
+    return max(0.0, round(score, 1))
 
 # -------------------------------------------------------------
 # STAGE 2: 12-QA EXCEL WORKBOOK GENERATOR
@@ -118,7 +175,6 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
         critical_count = stage2_data.get("critical_count", 0)
         decision = stage2_data.get("decision", "PASS")
         
-        # 1. Executive Summary Sheet
         summary_rows = [
             ["PARAMETER / FIELD", "METRIC / VALUE"],
             ["Institution / Governing University", university],
@@ -134,20 +190,22 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
         df_sum = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
         df_sum.to_excel(writer, sheet_name="Executive QA Summary", index=False)
         
-        # 2. 12 QA Matrix Sheet
         errs = stage2_data.get("error_register", [])
         matrix_rows = []
         for p in QA_12_PARAMETERS:
             related = [e for e in errs if p["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in p["name"].lower()]
+            
+            # Use realistic scoring calculation
+            achieved = calculate_realistic_score(p["weight"], related)
+            percent_achieved = round((achieved / p["weight"]) * 100, 1)
+
             if related:
                 has_crit = any(str(e.get("severity", "")).lower() == "critical" for e in related)
                 status = "REVISE" if has_crit else "OBSERVATION"
-                achieved = round(p["weight"] * 0.75, 1)
                 findings = "; ".join([str(e.get("description", e.get("finding", "Defect identified"))) for e in related])
                 remediation = "; ".join([str(e.get("recommendation", e.get("remediation", "Align with standard"))) for e in related])
             else:
                 status = "COMPLIANT"
-                achieved = float(p["weight"])
                 findings = "Meets institutional pedagogical quality benchmarks."
                 remediation = "None required. Maintain benchmark standard."
 
@@ -156,15 +214,14 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
                 "QA Dimension": p["name"],
                 "Weight": p["weight"],
                 "Score Achieved": achieved,
+                "Success (%)": f"{percent_achieved}%",
                 "Compliance Status": status,
                 "Auditor Findings": findings,
                 "Remediation Guidance": remediation,
-                "Benchmark Scope": p["desc"]
             })
         df_matrix = pd.DataFrame(matrix_rows)
         df_matrix.to_excel(writer, sheet_name="12 QA Parameter Matrix", index=False)
 
-        # 3. Detailed Error Register Sheet
         if errs:
             df_errs = pd.DataFrame(errs)
         else:
@@ -177,26 +234,21 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
             }])
         df_errs.to_excel(writer, sheet_name="Error Register", index=False)
 
-        # Style with openpyxl
         wb = writer.book
         h_fill = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
         h_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
-        border = Border(left=Side(style='thin', color='D9D9D9'),
-                        right=Side(style='thin', color='D9D9D9'),
-                        top=Side(style='thin', color='D9D9D9'),
-                        bottom=Side(style='thin', color='D9D9D9'))
+        border = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
+                        top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
 
         for ws in wb.worksheets:
             for col in ws.columns:
                 max_len = max(len(str(cell.value or '')) for cell in col)
                 col_letter = get_column_letter(col[0].column)
                 ws.column_dimensions[col_letter].width = min(max(max_len + 3, 15), 52)
-
             for cell in ws[1]:
                 cell.fill = h_fill
                 cell.font = h_font
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
             for row in ws.iter_rows(min_row=2):
                 for cell in row:
                     cell.border = border
@@ -258,11 +310,11 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     h2 = doc.add_heading("2. 12-Parameter Academic Quality Matrix", level=2)
     h2.style.font.color.rgb = RGBColor(0, 51, 102)
 
-    table = doc.add_table(rows=1, cols=5)
+    table = doc.add_table(rows=1, cols=6)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.style = "Table Grid"
 
-    headers = ["#", "QA Dimension", "Weight", "Status", "Auditor Findings"]
+    headers = ["#", "QA Dimension", "Weight", "Achieved", "Status", "Auditor Findings"]
     for idx, text in enumerate(headers):
         c = table.rows[0].cells[idx]
         c.text = text
@@ -273,15 +325,20 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     errs = stage2_data.get("error_register", [])
     for param in QA_12_PARAMETERS:
         related_errs = [e for e in errs if param["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in param["name"].lower()]
+        
+        achieved = calculate_realistic_score(param["weight"], related_errs)
+        pct = round((achieved / param["weight"]) * 100, 1)
+
         status = "REVISE" if any(str(e.get("severity", "")).lower() == "critical" for e in related_errs) else ("OBSERVATION" if related_errs else "COMPLIANT")
         findings = "; ".join([str(e.get("description", e.get("finding", "Minor variance"))) for e in related_errs]) if related_errs else "Meets institutional pedagogical quality standards."
 
         r_cells = table.add_row().cells
         r_cells[0].text = str(param["id"])
         r_cells[1].text = param["name"]
-        r_cells[2].text = f"{param['weight']}%"
-        r_cells[3].text = status
-        r_cells[4].text = findings
+        r_cells[2].text = f"{param['weight']}"
+        r_cells[3].text = f"{achieved} ({pct}%)"
+        r_cells[4].text = status
+        r_cells[5].text = findings
 
     doc.add_paragraph("")
 
@@ -433,7 +490,6 @@ if not is_authorized:
 
 st.sidebar.success(f"Verified Role: {user_role}")
 
-# Role-Based Permissions
 can_run_maker = user_role in ["Lead Administrator", "Content Author (Maker)"]
 can_run_checker = user_role in ["Lead Administrator", "SME Quality Reviewer (Checker)"]
 can_run_auditor = user_role in ["Lead Administrator", "Prompt Compliance Auditor"]
@@ -599,9 +655,11 @@ if st.session_state.draft_text:
     with st.expander("📄 Click to Preview Generated Manuscript", expanded=True):
         st.markdown(st.session_state.draft_text)
 
+    # Pass the user's uploaded reference file to extract its styles
     manuscript_docx = build_manuscript_docx(
         title=f"{selected_university} - {selected_deliverable}",
-        content=st.session_state.draft_text
+        content=st.session_state.draft_text,
+        ref_file=uploaded_ref
     )
     st.download_button(
         label=f"📥 Download {selected_deliverable} Manuscript (.DOCX)",
@@ -636,12 +694,19 @@ if st.session_state.stage2_results:
         errs = s2.get("error_register", [])
         for p in QA_12_PARAMETERS:
             related = [e for e in errs if p["name"].lower() in str(e).lower() or str(e.get("category", "")).lower() in p["name"].lower()]
+            
+            achieved = calculate_realistic_score(p["weight"], related)
+            percent_achieved = round((achieved / p["weight"]) * 100, 1)
+
             status = "REVISE" if any(str(e.get("severity", "")).lower() == "critical" for e in related) else ("OBSERVATION" if related else "COMPLIANT")
             findings = "; ".join([str(e.get("description", e.get("finding", "Defect identified"))) for e in related]) if related else "Meets quality standards."
+            
             matrix_display.append({
                 "#": p["id"],
                 "QA Dimension": p["name"],
-                "Weight": f"{p['weight']}%",
+                "Weight": p["weight"],
+                "Achieved": achieved,
+                "Success (%)": f"{percent_achieved}%",
                 "Compliance Status": status,
                 "Auditor Findings": findings
             })
@@ -651,7 +716,6 @@ if st.session_state.stage2_results:
         st.markdown("##### Quality Checker Error Register")
         st.dataframe(pd.DataFrame(errs), use_container_width=True)
 
-    # Dual Download Row: DOCX Report + 12 QA XLSX Workbook
     s2_col1, s2_col2 = st.columns(2)
 
     with s2_col1:
@@ -706,7 +770,6 @@ if st.session_state.stage3_results:
     st.markdown("##### Structural Drift Analysis")
     st.info(s3.get("structural_drift_analysis", "Zero structural drift detected."))
 
-    # Stage 3 DOCX Download
     docx_stream = build_prompt_audit_docx(
         audit_data=s3,
         deliverable_type=selected_deliverable,
