@@ -80,7 +80,6 @@ def extract_text_safely(file_input) -> str:
     return str(raw_data)
 
 def extract_styles_from_reference(ref_file):
-    """Detects font family, font size, and paragraph alignment from reference DOCX."""
     font_name = 'Arial'
     font_size = Pt(11)
     alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -110,7 +109,7 @@ def extract_styles_from_reference(ref_file):
     return font_name, font_size, alignment
 
 # -------------------------------------------------------------
-# STAGE 1: DELIVERABLE MANUSCRIPT DOCX BUILDER (WITH MATCHED STYLING)
+# STAGE 1: DELIVERABLE MANUSCRIPT DOCX BUILDER
 # -------------------------------------------------------------
 def build_manuscript_docx(title: str, content: str, ref_file=None) -> io.BytesIO:
     doc = Document()
@@ -468,16 +467,24 @@ if "stage3_results" not in st.session_state:
     st.session_state.stage3_results = None
 
 # ==========================================
-# SIDEBAR: STRICT AUTHENTICATION GATE
+# SIDEBAR: STRICT AUTHENTICATION GATE (@upgrad.com ENFORCED)
 # ==========================================
 st.sidebar.header("🔐 User Authentication")
-user_email = st.sidebar.text_input("Enter Registered Official Email ID", value="admin@university.edu").strip().lower()
+user_email = st.sidebar.text_input(
+    "Enter Official Email ID (@upgrad.com)", 
+    value="admin@upgrad.com"
+).strip().lower()
+
+if not user_email.endswith("@upgrad.com"):
+    st.sidebar.error("⛔ Access Denied: Only official '@upgrad.com' email accounts are permitted.")
+    st.warning("Please enter your official @upgrad.com faculty or admin email address.")
+    st.stop()
 
 is_authorized, user_role = verify_user(user_email)
 
 if not is_authorized:
-    st.sidebar.error("⛔ Access Denied: Unauthorized Official Email")
-    st.warning("Please enter a verified university faculty/admin email address to unlock the pipeline.")
+    st.sidebar.error("⛔ Access Denied: Unauthorized Account")
+    st.warning("This @upgrad.com account is not registered. Please contact the Lead Administrator to grant your team access.")
     st.stop()
 
 st.sidebar.success(f"Verified Role: {user_role}")
@@ -485,9 +492,6 @@ st.sidebar.success(f"Verified Role: {user_role}")
 # -------------------------------------------------------------
 # CONSOLIDATED TEAM PERMISSIONS
 # -------------------------------------------------------------
-# Maker Team: Unlocks Stage 1 only
-# Reviewer Team: Unlocks Stage 2 (Quality Checker) AND Stage 3 (Prompt Auditor)
-# Lead Admin: Unlocks all stages + Admin console
 can_run_maker = user_role in [
     "Lead Administrator",
     "Content Author (Maker Team)",
@@ -526,7 +530,11 @@ if user_role == "Lead Administrator":
 
         st.divider()
         st.markdown("##### 👤 Manage Team Roles & Logins")
-        new_user_email = st.text_input("Official Faculty / Staff Email", placeholder="e.g., faculty@university.edu", key="admin_add_user_email")
+        new_user_email = st.text_input(
+            "Official Email (@upgrad.com)", 
+            placeholder="e.g., faculty@upgrad.com", 
+            key="admin_add_user_email"
+        )
         new_user_role = st.selectbox(
             "Assign Team Role",
             [
@@ -537,13 +545,17 @@ if user_role == "Lead Administrator":
             key="admin_add_user_role_select"
         )
         if st.button("➕ Save Team Permission", use_container_width=True):
-            if new_user_email.strip():
-                try:
-                    assign_user_role(new_user_email.strip().lower(), new_user_role)
-                    st.success(f"Role saved for {new_user_email.strip()} as '{new_user_role}'")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to assign role: {e}")
+            cleaned_email = new_user_email.strip().lower()
+            if cleaned_email:
+                if not cleaned_email.endswith("@upgrad.com"):
+                    st.error("Invalid Domain: Only @upgrad.com email addresses can be authorized.")
+                else:
+                    try:
+                        assign_user_role(cleaned_email, new_user_role)
+                        st.success(f"Role saved for {cleaned_email} as '{new_user_role}'")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to assign role: {e}")
             else:
                 st.warning("Enter a valid official email address.")
 
