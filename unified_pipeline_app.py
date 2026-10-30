@@ -1,18 +1,142 @@
+import io
+import json
 import streamlit as st
-from services.access_manager import load_access_config, add_university, assign_user_role, verify_user
+import pandas as pd
+from docx import Document
+from docx.shared import Inches, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
+
+# Project Modular Services
+from services.access_manager import load_access_config, verify_user
 from services.unified_engine import run_stage_1_maker, run_stage_2_checker, run_stage_3_prompt_audit
-from services.deterministic_qa import run_pre_checks
-from services.unified_report_generator import build_master_audit_excel
-from services.docx_handler import extract_text_from_docx, generate_slm_docx
 
-st.set_page_config(page_title="Unified Academic Pipeline (Maker–Checker–Prompt)", layout="wide")
-st.title("University Unified 3-Tier Academic Content & Audit Pipeline")
-st.caption("Layered Execution: AI Maker (1) ➔ Academic QA Checker (2) ➔ Deep Prompt Auditor (3)")
+try:
+    from services.docx_handler import extract_text_from_docx, generate_slm_docx
+except ImportError:
+    def extract_text_from_docx(file):
+        doc = Document(file)
+        return "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+    def generate_slm_docx(title, content):
+        doc = Document()
+        doc.add_heading(title, 0)
+        for b in content.split("\n\n"):
+            if b.strip():
+                doc.add_paragraph(b.strip())
+        stream = io.BytesIO()
+        doc.save(stream)
+        stream.seek(0)
+        return stream
 
-# Load dynamic access control & university registry
+try:
+    from services.unified_report_generator import build_master_audit_excel
+except ImportError:
+    build_master_audit_excel = None
+
+# -------------------------------------------------------------
+# PAGE CONFIGURATION
+# -------------------------------------------------------------
+st.set_page_config(
+    page_title="Unified Academic Pipeline (Maker-Checker-Prompt)",
+    page_icon="🎓",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# -------------------------------------------------------------
+# STAGE 3 PROMPT AUDIT DOCX GENERATOR
+# -------------------------------------------------------------
+def build_prompt_audit_docx(audit_data: dict, deliverable_type: str = "SLM", university: str = "State Open University", program: str = "MBA") -> io.BytesIO:
+    """Generates an executive-grade Word document audit dossier for Stage 3 Prompt Compliance."""
+    doc = Document()
+
+    for section in doc.sections:
+        section.top_margin = Inches(0.8)
+        section.bottom_margin = Inches(0.8)
+        section.left_margin = Inches(0.8)
+        section.right_margin = Inches(0.8)
+
+    title_p = doc.add_paragraph()
+    title_run = title_p.add_run("ACADEMIC PROMPT & INSTRUCTION AUDIT REPORT")
+    title_run.bold = True
+    title_run.font.size = Pt(16)
+    title_run.font.color.rgb = RGBColor(0, 51, 102)
+    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    sub_p = doc.add_paragraph()
+    sub_run = sub_p.add_run(f"Stage 3 Deep Meta-Audit Dossier | Deliverable: {deliverable_type}")
+    sub_run.font.size = Pt(10)
+    sub_run.font.italic = True
+    sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    doc.add_paragraph("―" * 55)
+
+    meta_tbl = doc.add_table(rows=2, cols=2)
+    meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+    meta_tbl.rows[0].cells[0].text = f"University: {university}"
+    meta_tbl.rows[0].cells[1].text = f"Audit Status: {audit_data.get('overall_compliance_status', 'COMPLIANT')}"
+    meta_tbl.rows[1].cells[0].text = f"Academic Program: {program}"
+    meta_tbl.rows[1].cells[1].text = f"Prompt Score: {audit_data.get('prompt_score', 0.0)} / 100"
+
+    doc.add_paragraph("")
+
+    h1 = doc.add_heading("1. Executive Compliance Summary", level=2)
+    h1.style.font.color.rgb = RGBColor(0, 51, 102)
+
+    p_sum = doc.add_paragraph()
+    p_sum.add_run("• Compliance Status: ").bold = True
+    p_sum.add_run(f"{audit_data.get('overall_compliance_status', 'COMPLIANT')}\n")
+    p_sum.add_run("• Prompt Fidelity Score: ").bold = True
+    p_sum.add_run(f"{audit_data.get('prompt_score', 0.0)}%\n")
+    p_sum.add_run("• Negative Constraint Violations: ").bold = True
+    p_sum.add_run(f"{audit_data.get('negative_constraint_violations', 0)} detected\n")
+
+    h2 = doc.add_heading("2. Pedagogical & Prompt Compliance Matrix", level=2)
+    h2.style.font.color.rgb = RGBColor(0, 51, 102)
+
+    checks = audit_data.get("compliance_checks", [])
+    if checks:
+        tbl = doc.add_table(rows=1, cols=4)
+        tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        tbl.style = "Table Grid"
+
+        headers = ["Dimension", "Status", "Severity", "Auditor Findings"]
+        for idx, text in enumerate(headers):
+            cell = tbl.rows[0].cells[idx]
+            cell.text = text
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.bold = True
+
+        for item in checks:
+            row = tbl.add_row().cells
+            row[0].text = str(item.get("dimension", ""))
+            row[1].text = str(item.get("status", ""))
+            row[2].text = str(item.get("severity", "None"))
+            row[3].text = str(item.get("finding", ""))
+
+    doc.add_paragraph("")
+
+    h3 = doc.add_heading("3. Structural Drift & Guardrail Analysis", level=2)
+    h3.style.font.color.rgb = RGBColor(0, 51, 102)
+    doc.add_paragraph(audit_data.get("structural_drift_analysis", "Zero structural drift detected."))
+
+    doc.add_paragraph("\n" + "―" * 55)
+    footer = doc.add_paragraph("Certified by University Academic AI Meta-Auditor")
+    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    footer.style.font.italic = True
+    footer.style.font.size = Pt(9)
+
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out
+
+# -------------------------------------------------------------
+# DYNAMIC ACCESS CONTROL & SESSION STATE
+# -------------------------------------------------------------
 access_cfg = load_access_config()
 
-# Session State Setup
 if "stage" not in st.session_state:
     st.session_state.stage = "INPUT"
 if "draft_text" not in st.session_state:
@@ -28,243 +152,275 @@ if "stage3_results" not in st.session_state:
 st.sidebar.header("🔐 User Authentication")
 user_email = st.sidebar.text_input("Enter Registered Email ID", value="admin@university.edu").strip().lower()
 
-# Verification check
 is_authorized, user_role = verify_user(user_email)
 
 if not is_authorized:
-    st.sidebar.error("⛔ Access Denied")
-    st.error(
-        f"**Access Restricted:** The email `{user_email}` is not registered in the institutional access roster. "
-        "Please contact the University Administrator to grant access."
-    )
-    st.stop()  # Halts all pipeline execution for unauthorized users
+    st.sidebar.error("⛔ Access Denied: Unauthorized Email")
+    st.warning("Please enter a verified university faculty/admin email address to unlock the pipeline.")
+    st.stop()
 
-st.sidebar.success(f"**Verified Role:** {user_role}")
+st.sidebar.success(f"Verified Role: {user_role}")
 
-# Dynamic Permission Matrix
-is_admin = "Administrator" in user_role
-can_run_maker = "Maker" in user_role or is_admin
-can_run_checker = "Checker" in user_role or is_admin
-can_run_prompt = "Prompt Engineer" in user_role or is_admin
+# Role-Based Permissions
+can_run_maker = user_role in ["Lead Administrator", "Content Author (Maker)"]
+can_run_checker = user_role in ["Lead Administrator", "SME Quality Reviewer (Checker)"]
+can_run_auditor = user_role in ["Lead Administrator", "Prompt Compliance Auditor"]
 
-# ==========================================
-# SIDEBAR: INSTITUTIONAL SELECTION & FORMATS
-# ==========================================
 st.sidebar.divider()
-st.sidebar.header("🏛 Institutional Scope")
+st.sidebar.header("🏛️ Institutional Scope")
 
-# University Dropdown (Populated dynamically from config)
-university_list = access_cfg.get("universities", ["State Open University"])
-selected_university = st.sidebar.selectbox("Select University", options=university_list)
+# Load registered universities from dynamic config or defaults
+known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
+if isinstance(access_cfg, dict) and "universities" in access_cfg:
+    known_unis = access_cfg["universities"]
 
-program_name = st.sidebar.text_input("Program / Discipline", value="Master of Business Administration (MBA)")
+selected_university = st.sidebar.selectbox("Select University", known_unis, index=0)
 
-# Exact 5 Review Formats
-FORMAT_OPTIONS = [
-    "MCQ",
-    "SLM",
-    "Question Bank",
-    "PPT",
-    "FAQs & Misconceptions Review"
-]
-deliverable_type = st.sidebar.selectbox("Deliverable Format", options=FORMAT_OPTIONS)
-academic_level = st.sidebar.selectbox("Academic Level", ["Postgraduate (PG)", "Undergraduate (UG)"])
+selected_program = st.sidebar.selectbox(
+    "Program / Discipline",
+    [
+        "Master of Business Administration (MBA)",
+        "Master of Science (M.Sc) Data Science",
+        "Master of Computer Applications (MCA)",
+        "Bachelor of Commerce (B.Com)"
+    ],
+    index=0
+)
 
-app_metadata = {
-    "university_name": selected_university,
-    "program_name": program_name,
-    "deliverable_type": deliverable_type,
-    "academic_level": academic_level,
-    "operator_email": user_email,
-    "operator_role": user_role
-}
+selected_deliverable = st.sidebar.selectbox(
+    "Deliverable Format",
+    ["SLM", "PPT", "Question Bank", "MCQ", "FAQs & Misconceptions Review"],
+    index=0
+)
 
-# ==========================================
-# ADMIN MANAGEMENT CONSOLE (ADMIN ONLY)
-# ==========================================
-if is_admin:
-    with st.expander("⚙️ Admin Management Console (User Whitelist & University Registry)", expanded=False):
-        adm_col1, adm_col2 = st.columns(2)
+selected_level = st.sidebar.selectbox(
+    "Academic Level",
+    ["Postgraduate (PG)", "Undergraduate (UG)", "Diploma / Executive"],
+    index=0
+)
 
-        with adm_col1:
-            st.markdown("##### 🏛 Add University to Dropdown")
-            new_uni_name = st.text_input("New University Name", placeholder="e.g., Central Technical University")
-            if st.button("Add University"):
-                if new_uni_name.strip():
-                    if add_university(new_uni_name):
-                        st.success(f"Added '{new_uni_name}' to dropdown list!")
-                        st.rerun()
-                    else:
-                        st.warning("University already exists in the dropdown list.")
-                else:
-                    st.error("Please enter a valid university name.")
+# -------------------------------------------------------------
+# MAIN APP HEADER & INPUT INGESTION
+# -------------------------------------------------------------
+st.title("University Unified 3-Tier Academic Content & Audit Pipeline")
+st.caption("Layered Execution: AI Maker (1) ➔ Academic QA Checker (2) ➔ Deep Prompt Auditor (3)")
 
-        with adm_col2:
-            st.markdown("##### 👥 Assign User Access & Role")
-            new_user_email = st.text_input("User Email ID", placeholder="faculty@university.edu").strip().lower()
-            role_options = ["Maker (Author)", "Checker (Auditor)", "Prompt Engineer", "Lead Administrator"]
-            selected_role_assignment = st.selectbox("Assign Workflow Role", options=role_options)
-            if st.button("Whitelist / Update User"):
-                if new_user_email and "@" in new_user_email:
-                    assign_user_role(new_user_email, selected_role_assignment)
-                    st.success(f"Assigned '{new_user_email}' as '{selected_role_assignment}'!")
-                    st.rerun()
-                else:
-                    st.error("Please provide a valid email address.")
-
-# ==========================================
-# INPUT SECTION (DOCX & TEXT FALLBACK)
-# ==========================================
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("1. Approved Syllabus")
-    up_syl = st.file_uploader("Upload Syllabus (.docx or .txt)", type=["docx", "txt"], key="u_syl")
-    syl_text = st.text_area("Or Paste Syllabus Manually", height=140, placeholder="Paste topics or unit syllabus here...")
-    if up_syl:
-        syllabus_data = extract_text_from_docx(up_syl.read()) if up_syl.name.endswith(".docx") else up_syl.read().decode("utf-8")
-        st.success(f"Loaded: {up_syl.name}")
-    else:
-        syllabus_data = syl_text
+    st.subheader("1. Syllabus Outline")
+    uploaded_syllabus = st.file_uploader("Upload Syllabus Outline (.docx, .txt)", type=["docx", "txt"], key="uploader_syl")
+    manual_syllabus = st.text_area("Or Paste Syllabus Manually", placeholder="Paste topics or unit syllabus here...", height=120)
+    
+    syllabus_text = ""
+    if uploaded_syllabus:
+        syllabus_text = extract_text_from_docx(uploaded_syllabus) if uploaded_syllabus.name.lower().endswith(".docx") else uploaded_syllabus.read().decode("utf-8", errors="ignore")
+        st.success(f"Loaded: {uploaded_syllabus.name}")
+    elif manual_syllabus.strip():
+        syllabus_text = manual_syllabus.strip()
 
 with col2:
-    st.subheader("2. Prescribed References")
-    up_ref = st.file_uploader("Upload References (.docx or .txt)", type=["docx", "txt"], key="u_ref")
-    ref_text = st.text_area("Or Paste References Manually", height=140, placeholder="Paste source extracts or textbook notes...")
-    if up_ref:
-        reference_data = extract_text_from_docx(up_ref.read()) if up_ref.name.endswith(".docx") else up_ref.read().decode("utf-8")
-        st.success(f"Loaded: {up_ref.name}")
-    else:
-        reference_data = ref_text
+    st.subheader("2. Reference & Benchmark Material")
+    uploaded_ref = st.file_uploader("Upload Prescribed References (.docx, .txt)", type=["docx", "txt"], key="uploader_ref")
+    manual_ref = st.text_area("Or Paste References Manually", placeholder="Paste source extracts or textbook notes...", height=120)
+    
+    ref_text = ""
+    if uploaded_ref:
+        ref_text = extract_text_from_docx(uploaded_ref) if uploaded_ref.name.lower().endswith(".docx") else uploaded_ref.read().decode("utf-8", errors="ignore")
+        st.success(f"Loaded: {uploaded_ref.name}")
+    elif manual_ref.strip():
+        ref_text = manual_ref.strip()
 
 st.divider()
 
-# ==========================================
-# 3-STAGE SEQUENTIAL PIPELINE
-# ==========================================
+# -------------------------------------------------------------
+# SEQUENTIAL PIPELINE CONTROLS
+# -------------------------------------------------------------
 st.subheader("Sequential Pipeline Execution")
-c_s1, c_s2, c_s3 = st.columns(3)
 
-# --- STAGE 1: MAKER ---
-with c_s1:
+btn_col1, btn_col2, btn_col3 = st.columns(3)
+
+with btn_col1:
     st.markdown("#### Stage 1: AI Maker")
-    maker_btn = st.button("Step 1: Run AI Maker", type="primary", disabled=not can_run_maker, use_container_width=True)
-    if not can_run_maker:
-        st.caption("🔒 Role Restricted: Requires Maker or Admin")
+    run_maker = st.button(
+        "Step 1: Run AI Maker",
+        type="primary",
+        disabled=(not can_run_maker),
+        help="Execute AI drafting" if can_run_maker else "Restricted by Role-Based Access Control",
+        use_container_width=True
+    )
 
-    if maker_btn:
-        if not syllabus_data.strip() or not reference_data.strip():
-            st.error("Please supply both syllabus and reference data.")
-        else:
-            with st.spinner(f"Drafting {deliverable_type}..."):
-                try:
-                    st.session_state.draft_text = run_stage_1_maker(syllabus_data, reference_data, academic_level, deliverable_type)
-                    st.session_state.stage = "STAGE_1_COMPLETE"
-                    st.session_state.stage2_results = None
-                    st.session_state.stage3_results = None
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Maker Failed: {e}")
-
-# --- STAGE 2: ACADEMIC CHECKER ---
-with c_s2:
+with btn_col2:
     st.markdown("#### Stage 2: Quality Checker")
-    s2_enabled = (st.session_state.draft_text != "") and can_run_checker
-    checker_btn = st.button("Step 2: Run Academic Audit", disabled=not s2_enabled, use_container_width=True)
-    if not can_run_checker:
-        st.caption("🔒 Role Restricted: Requires Checker or Admin")
+    run_checker = st.button(
+        "Step 2: Run Academic Audit",
+        disabled=(not can_run_checker or not bool(st.session_state.draft_text)),
+        help="Execute Academic QA Audit" if can_run_checker else "Restricted by Role-Based Access Control",
+        use_container_width=True
+    )
 
-    if checker_btn:
-        with st.spinner("Auditing 12 QA parameters & syllabus coverage..."):
-            try:
-                pre = run_pre_checks(st.session_state.draft_text)
-                if not pre["passed"]:
-                    st.warning(f"Deterministic QA Flags: {pre['flags']}")
-
-                res2 = run_stage_2_checker(st.session_state.draft_text, syllabus_data, reference_data)
-                st.session_state.stage2_results = res2
-                st.session_state.stage = "STAGE_2_COMPLETE"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Stage 2 Failed: {e}")
-
-# --- STAGE 3: PROMPT AUDITOR ---
-with c_s3:
+with btn_col3:
     st.markdown("#### Stage 3: Prompt Auditor")
-    s3_enabled = (st.session_state.stage2_results is not None) and can_run_prompt
-    prompt_btn = st.button("Step 3: Run Prompt Audit", disabled=not s3_enabled, use_container_width=True)
-    if not can_run_prompt:
-        st.caption("🔒 Role Restricted: Requires Prompt Auditor or Admin")
+    run_auditor = st.button(
+        "Step 3: Run Prompt Audit",
+        disabled=(not can_run_auditor or not bool(st.session_state.draft_text)),
+        help="Execute Deep Prompt Meta-Audit" if can_run_auditor else "Restricted by Role-Based Access Control",
+        use_container_width=True
+    )
 
-    if prompt_btn:
-        with st.spinner("Analyzing prompt adherence and negative constraints..."):
+# --- EXECUTE STAGE 1 ---
+if run_maker:
+    if not syllabus_text:
+        st.error("Please provide an approved Syllabus outline first.")
+    else:
+        with st.spinner("Stage 1 generation in progress (streaming enabled)..."):
             try:
-                res3 = run_stage_3_prompt_audit(st.session_state.draft_text, deliverable_type)
-                st.session_state.stage3_results = res3
-                st.session_state.stage = "STAGE_3_COMPLETE"
-                st.rerun()
+                draft = run_stage_1_maker(
+                    syllabus=syllabus_text,
+                    reference=ref_text,
+                    level=selected_level,
+                    deliverable=selected_deliverable
+                )
+                st.session_state.draft_text = draft
+                st.session_state.stage2_results = None
+                st.session_state.stage3_results = None
+                st.session_state.stage = "STAGE_1_COMPLETE"
+                st.success("Stage 1 Content Generation Complete!")
             except Exception as e:
-                st.error(f"Stage 3 Failed: {e}")
+                st.error(f"Maker Failed: {e}")
 
-# ==========================================
-# DELIVERABLE OUTPUTS & REPORTING
-# ==========================================
+# --- EXECUTE STAGE 2 ---
+if run_checker:
+    with st.spinner("Stage 2 Academic & Mapping QA Audit running..."):
+        try:
+            res_checker = run_stage_2_checker(
+                draft=st.session_state.draft_text,
+                syllabus=syllabus_text,
+                reference=ref_text
+            )
+            st.session_state.stage2_results = res_checker
+            st.session_state.stage = "STAGE_2_COMPLETE"
+            st.success("Stage 2 Academic Quality Audit Complete!")
+        except Exception as e:
+            st.error(f"Checker Failed: {e}")
+
+# --- EXECUTE STAGE 3 ---
+if run_auditor:
+    with st.spinner("Stage 3 Deep Prompt & Guardrail Audit running..."):
+        try:
+            res_auditor = run_stage_3_prompt_audit(
+                draft=st.session_state.draft_text,
+                deliverable=selected_deliverable
+            )
+            st.session_state.stage3_results = res_auditor
+            st.session_state.stage = "STAGE_3_COMPLETE"
+            st.success("Stage 3 Prompt Compliance Audit Complete!")
+        except Exception as e:
+            st.error(f"Auditor Failed: {e}")
+
+st.divider()
+
+# -------------------------------------------------------------
+# STAGE 1 RESULTS & MANUSCRIPT EXPORT
+# -------------------------------------------------------------
 if st.session_state.draft_text:
-    st.divider()
-    st.subheader(f"Stage 1 Deliverable: {deliverable_type} Manuscript")
-    with st.expander("Expand to Preview Manuscript", expanded=False):
+    st.subheader(f"Stage 1 Deliverable: {selected_deliverable} Manuscript")
+    with st.expander("📄 Click to Preview Generated Manuscript", expanded=True):
         st.markdown(st.session_state.draft_text)
 
-    maker_docx = generate_slm_docx(
-        title=f"{deliverable_type} Unit Manuscript",
-        content_markdown=st.session_state.draft_text,
-        metadata=app_metadata
+    manuscript_docx = generate_slm_docx(
+        title=f"{selected_university} - {selected_deliverable}",
+        content=st.session_state.draft_text
     )
     st.download_button(
-        label=f"Download {deliverable_type} Manuscript (.docx)",
-        data=maker_docx,
-        file_name=f"{selected_university.replace(' ', '_')}_{deliverable_type.replace(' ', '_')}.docx",
+        label=f"📥 Download {selected_deliverable} Manuscript (.DOCX)",
+        data=manuscript_docx,
+        file_name=f"{selected_program}_{selected_deliverable}_Manuscript.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
+# -------------------------------------------------------------
+# STAGE 2 RESULTS & ERROR REGISTER
+# -------------------------------------------------------------
 if st.session_state.stage2_results:
     st.divider()
-    st.subheader("Audit & Compliance Evaluation")
-
-    r2 = st.session_state.stage2_results
-    r3 = st.session_state.stage3_results
+    st.subheader("Stage 2: Academic Quality & Syllabus Verification")
+    s2 = st.session_state.stage2_results
 
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Academic Decision", r2["decision"])
-    m2.metric("Academic Score", f"{r2['score']:.1f}%")
-    m3.metric("Syllabus Coverage", f"{r2['coverage_pct']:.1f}%")
+    m1.metric("Audit Score", f"{s2.get('score', 0.0)} / 100")
+    m2.metric("Syllabus Coverage", f"{s2.get('coverage_pct', 0.0)}%")
+    m3.metric("Critical Errors", s2.get("critical_count", 0))
+    status_dec = s2.get("decision", "PENDING")
+    m4.metric("Verification Status", status_dec)
 
-    if r3:
-        m4.metric("Prompt Compliance", f"{r3.get('prompt_score', 0):.1f}%", r3.get("overall_compliance_status"))
+    if status_dec == "PASS":
+        st.success(f"Audit Status: {status_dec} — Meets institutional quality benchmarks.")
     else:
-        m4.metric("Prompt Compliance", "Step 3 Pending")
+        st.warning(f"Audit Status: {status_dec} — Revision recommended before publishing.")
 
-    tab_err, tab_syl, tab_p_audit = st.tabs(["Academic Error Register", "Syllabus Matrix", "Deep Prompt Adherence"])
-    with tab_err:
-        st.dataframe(r2["error_register"], use_container_width=True)
-    with tab_syl:
-        st.dataframe(r2["syllabus_mapping"], use_container_width=True)
-    with tab_p_audit:
-        if r3:
-            st.dataframe(r3.get("compliance_checks", []), use_container_width=True)
-            st.info(f"**Structural Drift Assessment:** {r3.get('structural_drift_analysis')}")
-        else:
-            st.info("Execute Step 3 to review negative constraints, boilerplate flags, and Bloom's verb adherence.")
+    errs = s2.get("error_register", [])
+    if errs:
+        st.markdown("##### Quality Checker Error Register")
+        st.dataframe(pd.DataFrame(errs), use_container_width=True)
 
-    master_excel = build_master_audit_excel(
-        academic_results=r2,
-        prompt_results=r3,
-        metadata=app_metadata
-    )
-    st.download_button(
-        label="Download Master Consolidated Audit Dossier (.xlsx)",
-        data=master_excel,
-        file_name=f"{selected_university.replace(' ', '_')}_Master_Audit_Report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
-    )
+# -------------------------------------------------------------
+# STAGE 3 RESULTS & PROMPT AUDIT DOCX EXPORT
+# -------------------------------------------------------------
+if st.session_state.stage3_results:
+    st.divider()
+    st.subheader("Stage 3: Deep Prompt & Instruction Compliance Audit")
+    s3 = st.session_state.stage3_results
+
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Compliance Status", s3.get("overall_compliance_status", "COMPLIANT"))
+    p2.metric("Prompt Score", f"{s3.get('prompt_score', 0.0)}%")
+    p3.metric("Negative Constraint Violations", s3.get("negative_constraint_violations", 0))
+
+    compliance_matrix = s3.get("compliance_checks", [])
+    if compliance_matrix:
+        st.markdown("##### Meta-Audit Compliance Matrix")
+        st.dataframe(pd.DataFrame(compliance_matrix), use_container_width=True)
+
+    st.markdown("##### Structural Drift Analysis")
+    st.info(s3.get("structural_drift_analysis", "Zero structural drift detected."))
+
+    dl_col1, dl_col2 = st.columns(2)
+
+    # DOCX Download Trigger
+    with dl_col1:
+        docx_stream = build_prompt_audit_docx(
+            audit_data=s3,
+            deliverable_type=selected_deliverable,
+            university=selected_university,
+            program=selected_program
+        )
+        st.download_button(
+            label="📄 Download Stage 3 Audit Report (.DOCX)",
+            data=docx_stream,
+            file_name=f"{selected_program}_{selected_deliverable}_Prompt_Audit_Report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            type="primary",
+            use_container_width=True
+        )
+
+    # Optional Excel Master Audit Download Trigger (if available)
+    with dl_col2:
+        if build_master_audit_excel and st.session_state.stage2_results:
+            try:
+                excel_stream = build_master_audit_excel(
+                    s2_results=st.session_state.stage2_results,
+                    s3_results=s3,
+                    university=selected_university,
+                    program=selected_program,
+                    deliverable=selected_deliverable
+                )
+                st.download_button(
+                    label="📊 Download Master Audit Workbook (.XLSX)",
+                    data=excel_stream,
+                    file_name=f"{selected_program}_{selected_deliverable}_Master_Audit.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            except Exception:
+                pass
