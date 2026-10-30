@@ -472,7 +472,7 @@ if "stage3_results" not in st.session_state:
 st.sidebar.header("🔐 User Authentication")
 user_email = st.sidebar.text_input(
     "Enter Official Email ID (@upgrad.com)", 
-    value="admin@upgrad.com"
+    value="sandeep1.shrivastava@upgrad.com"
 ).strip().lower()
 
 if not user_email.endswith("@upgrad.com"):

@@ -4,6 +4,9 @@ import os
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "access_config.json")
 ALLOWED_DOMAIN = "upgrad.com"
 
+# Primary Lead Administrator
+PRIMARY_ADMIN = "sandeep1.shrivastava@upgrad.com"
+
 DEFAULT_CONFIG = {
     "allowed_domain": ALLOWED_DOMAIN,
     "universities": [
@@ -12,9 +15,8 @@ DEFAULT_CONFIG = {
         "Central Higher Education Institute"
     ],
     "users": {
-        "admin@upgrad.com": "Lead Administrator",
-        "author@upgrad.com": "Content Author (Maker Team)",
-        "reviewer@upgrad.com": "Academic Reviewer (Checker & Auditor Team)"
+        PRIMARY_ADMIN: "Lead Administrator",
+        "admin@upgrad.com": "Lead Administrator"
     }
 }
 
@@ -31,8 +33,8 @@ def load_access_config():
             data = json.load(f)
             if "users" not in data:
                 data["users"] = {}
-            if f"admin@{ALLOWED_DOMAIN}" not in data["users"]:
-                data["users"][f"admin@{ALLOWED_DOMAIN}"] = "Lead Administrator"
+            # Ensure primary admin is always registered
+            data["users"][PRIMARY_ADMIN] = "Lead Administrator"
             return data
     except Exception:
         return DEFAULT_CONFIG
@@ -46,17 +48,20 @@ def save_access_config(cfg):
 
 def verify_user(email: str):
     email = email.strip().lower()
+    # 1. Strictly enforce @upgrad.com domain
     if not email.endswith(f"@{ALLOWED_DOMAIN}"):
         return False, "Invalid Domain"
 
+    # 2. Permanent Lead Administrator Access
+    if email == PRIMARY_ADMIN.lower() or email == f"admin@{ALLOWED_DOMAIN}":
+        return True, "Lead Administrator"
+
+    # 3. Check authorized team members in registry
     cfg = load_access_config()
     users = cfg.get("users", {})
 
     if email in users:
         return True, users[email]
-
-    if email == f"admin@{ALLOWED_DOMAIN}":
-        return True, "Lead Administrator"
 
     return False, None
 
