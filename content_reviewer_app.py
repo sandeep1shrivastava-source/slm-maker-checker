@@ -10,6 +10,7 @@ from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from pypdf import PdfReader
 
 # Modular Project Services
 from services.access_manager import load_access_config, verify_user
@@ -52,7 +53,7 @@ DEFAULT_PROGRAMS = [
 ]
 
 # -------------------------------------------------------------
-# CONFIG & DIRECTORY MANAGEMENT HELPERS
+# CONFIG MANAGEMENT
 # -------------------------------------------------------------
 def get_config_file_path():
     p1 = os.path.join(os.path.dirname(__file__), "services", "access_config.json")
@@ -72,11 +73,9 @@ def save_role_to_config(email: str, role: str):
                 cfg = json.load(f)
         except Exception:
             cfg = {}
-    
     users = cfg.setdefault("users", {})
     if isinstance(users, dict):
         users[email.strip().lower()] = role
-    
     with open(path, "w") as f:
         json.dump(cfg, f, indent=4)
 
@@ -89,7 +88,6 @@ def save_university_to_config(uni_name: str):
                 cfg = json.load(f)
         except Exception:
             cfg = {}
-            
     unis = cfg.setdefault("universities", [])
     if uni_name.strip() not in unis:
         unis.append(uni_name.strip())
@@ -97,42 +95,63 @@ def save_university_to_config(uni_name: str):
             json.dump(cfg, f, indent=4)
 
 # -------------------------------------------------------------
-# DOCUMENT EXTRACTION UTILITIES
+# MULTI-FORMAT EXTRACTION (DOCX, PDF, EXCEL, TXT)
 # -------------------------------------------------------------
-def extract_text_safely(file_input) -> str:
-    if file_input is None:
+def extract_content_multi_format(uploaded_file) -> str:
+    if uploaded_file is None:
         return ""
-    fname = getattr(file_input, "name", "").lower()
-    
-    if hasattr(file_input, "getvalue"):
-        raw_data = file_input.getvalue()
-    elif hasattr(file_input, "read"):
-        raw_data = file_input.read()
-    else:
-        raw_data = file_input
+    fname = getattr(uploaded_file, "name", "").lower()
+    raw_bytes = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else uploaded_file.read()
+    text_output = []
 
-    if fname.endswith(".docx") or (isinstance(raw_data, bytes) and raw_data.startswith(b"PK")):
+    # 1. Word Documents (.docx)
+    if fname.endswith(".docx") or (isinstance(raw_bytes, bytes) and raw_bytes.startswith(b"PK\x03\x04")):
         try:
-            doc = Document(io.BytesIO(raw_data))
-            text_blocks = []
+            doc = Document(io.BytesIO(raw_bytes))
             for p in doc.paragraphs:
                 if p.text.strip():
-                    text_blocks.append(p.text.strip())
+                    text_output.append(p.text.strip())
             for tbl in doc.tables:
                 for row in tbl.rows:
                     row_vals = [c.text.strip() for c in row.cells if c.text.strip()]
                     if row_vals:
-                        text_blocks.append(" | ".join(row_vals))
-            return "\n".join(text_blocks)
+                        text_output.append(" | ".join(row_vals))
+            return "\n".join(text_output)
         except Exception:
             pass
 
-    if isinstance(raw_data, bytes):
+    # 2. PDF Documents (.pdf)
+    if fname.endswith(".pdf") or (isinstance(raw_bytes, bytes) and raw_bytes.startswith(b"%PDF")):
         try:
-            return raw_data.decode("utf-8")
+            reader = PdfReader(io.BytesIO(raw_bytes))
+            for p_idx, page in enumerate(reader.pages):
+                txt = page.extract_text()
+                if txt and txt.strip():
+                    text_output.append(f"[Page {p_idx + 1}]\n{txt.strip()}")
+            return "\n\n".join(text_output)
         except Exception:
-            return raw_data.decode("latin-1", errors="ignore")
-    return str(raw_data)
+            pass
+
+    # 3. Excel Spreadsheets (.xlsx, .xls)
+    if fname.endswith((".xlsx", ".xls")):
+        try:
+            excel_file = pd.ExcelFile(io.BytesIO(raw_bytes))
+            for sheet in excel_file.sheet_names:
+                df = pd.read_excel(excel_file, sheet_name=sheet).dropna(how="all")
+                text_output.append(f"=== Sheet: {sheet} ===")
+                for idx, row in df.iterrows():
+                    items = [f"{col}: {val}" for col, val in row.items() if pd.notna(val)]
+                    if items:
+                        text_output.append(f"[Row {idx + 1}] " + " | ".join(items))
+            return "\n".join(text_output)
+        except Exception:
+            pass
+
+    # 4. Plain Text (.txt)
+    try:
+        return raw_bytes.decode("utf-8")
+    except Exception:
+        return raw_bytes.decode("latin-1", errors="ignore")
 
 def calculate_realistic_score(weight: float, related_errors: list) -> float:
     score = float(weight)
@@ -147,7 +166,7 @@ def calculate_realistic_score(weight: float, related_errors: list) -> float:
     return max(0.0, round(score, 1))
 
 # -------------------------------------------------------------
-# REPORT GENERATORS
+# REPORT GENERATORS WITH SYLLABUS MAPPING TAB
 # -------------------------------------------------------------
 def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deliverable: str, batch: str = "", semester_year: str = "") -> io.BytesIO:
     output = io.BytesIO()
@@ -157,6 +176,7 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
         critical_count = stage2_data.get("critical_count", 0)
         decision = stage2_data.get("decision", "PASS")
         
+        # 1. Executive Summary
         summary_rows = [
             ["PARAMETER / FIELD", "METRIC / VALUE"],
             ["Institution / Governing University", university],
@@ -164,16 +184,29 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
             ["Batch / Cohort", batch or "N/A"],
             ["Academic Term / Semester", semester_year or "N/A"],
             ["Deliverable Format Under Review", deliverable],
-            ["Audit Framework Standard", "12-Parameter Academic Quality Assurance Framework"],
             ["Overall QA Quality Score", f"{score} / 100"],
             ["Syllabus Topic Coverage", f"{coverage}%"],
             ["Critical Defects Count", critical_count],
             ["Final Audit Determination", decision],
             ["Institutional Certification Status", "ACCREDITED FOR INSTRUCTION" if decision == "PASS" else "REQUIRES SME REVISION"]
         ]
-        df_sum = pd.DataFrame(summary_rows[1:], columns=summary_rows[0])
-        df_sum.to_excel(writer, sheet_name="Executive QA Summary", index=False)
+        pd.DataFrame(summary_rows[1:], columns=summary_rows[0]).to_excel(writer, sheet_name="Executive QA Summary", index=False)
         
+        # 2. Granular Syllabus vs Content Mapping
+        mapping = stage2_data.get("syllabus_mapping", [])
+        if mapping:
+            map_rows = []
+            for item in mapping:
+                map_rows.append({
+                    "Syllabus Topic / Unit": item.get("topic", "N/A"),
+                    "Coverage Status": item.get("status", "Covered"),
+                    "Pedagogical Depth": item.get("depth", "Adequate"),
+                    "Location in Manuscript": item.get("content_location", "Identified in Body"),
+                    "Gap Analysis & Auditor Remarks": item.get("gap_analysis", "Meets benchmark requirements.")
+                })
+            pd.DataFrame(map_rows).to_excel(writer, sheet_name="Syllabus vs Content Mapping", index=False)
+
+        # 3. 12 QA Parameter Matrix
         errs = stage2_data.get("error_register", [])
         matrix_rows = []
         for p in QA_12_PARAMETERS:
@@ -201,9 +234,9 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
                 "Auditor Findings": findings,
                 "Remediation Guidance": remediation,
             })
-        df_matrix = pd.DataFrame(matrix_rows)
-        df_matrix.to_excel(writer, sheet_name="12 QA Parameter Matrix", index=False)
+        pd.DataFrame(matrix_rows).to_excel(writer, sheet_name="12 QA Parameter Matrix", index=False)
 
+        # 4. Error Register
         if errs:
             df_errs = pd.DataFrame(errs)
         else:
@@ -216,6 +249,7 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
             }])
         df_errs.to_excel(writer, sheet_name="Error Register", index=False)
 
+        # Styling
         wb = writer.book
         h_fill = PatternFill(start_color="002060", end_color="002060", fill_type="solid")
         h_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -226,7 +260,7 @@ def build_stage2_qa_excel(stage2_data: dict, university: str, program: str, deli
             for col in ws.columns:
                 max_len = max(len(str(cell.value or '')) for cell in col)
                 col_letter = get_column_letter(col[0].column)
-                ws.column_dimensions[col_letter].width = min(max(max_len + 3, 15), 52)
+                ws.column_dimensions[col_letter].width = min(max(max_len + 3, 16), 55)
             for cell in ws[1]:
                 cell.fill = h_fill
                 cell.font = h_font
@@ -255,7 +289,7 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     sub_p = doc.add_paragraph()
-    r_sub = sub_p.add_run(f"Stage 2 SME Quality & 12-Parameter Pedagogical Audit | {batch} ({semester_year})")
+    r_sub = sub_p.add_run(f"Stage 2 SME Quality & Syllabus Cross-Audit | {batch} ({semester_year})")
     r_sub.font.size = Pt(10)
     r_sub.font.italic = True
     sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -279,14 +313,30 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     meta_tbl.rows[3].cells[1].text = f"Syllabus Coverage: {cov}% (Critical Errors: {crit})"
 
     doc.add_paragraph("")
-    h1 = doc.add_heading("1. Executive Quality Scorecard", level=2)
+    h1 = doc.add_heading("1. Granular Syllabus vs Content Cross-Verification", level=2)
     h1.style.font.color.rgb = RGBColor(0, 51, 102)
-    p_card = doc.add_paragraph()
-    p_card.add_run(f"• Overall Audit Score: {score}%\n")
-    p_card.add_run(f"• Syllabus Topic Coverage: {cov}%\n")
-    p_card.add_run(f"• Critical Academic Defects: {crit} detected\n")
-    p_card.add_run(f"• Determination: {'VERIFIED FOR INSTRUCTION' if dec == 'PASS' else 'ACTION REQUIRED BY SME REVIEWER'}")
 
+    mapping = stage2_data.get("syllabus_mapping", [])
+    if mapping:
+        map_tbl = doc.add_table(rows=1, cols=5)
+        map_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
+        map_tbl.style = "Table Grid"
+        headers = ["Syllabus Topic", "Status", "Depth", "Content Location", "Gap Analysis"]
+        for idx, text in enumerate(headers):
+            cell = map_tbl.rows[0].cells[idx]
+            cell.text = text
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.bold = True
+        for item in mapping:
+            rc = map_tbl.add_row().cells
+            rc[0].text = str(item.get("topic", ""))
+            rc[1].text = str(item.get("status", ""))
+            rc[2].text = str(item.get("depth", ""))
+            rc[3].text = str(item.get("content_location", ""))
+            rc[4].text = str(item.get("gap_analysis", ""))
+
+    doc.add_paragraph("")
     h2 = doc.add_heading("2. 12-Parameter Academic Quality Matrix", level=2)
     h2.style.font.color.rgb = RGBColor(0, 51, 102)
 
@@ -317,28 +367,6 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
         r_cells[3].text = f"{achieved} ({pct}%)"
         r_cells[4].text = status
         r_cells[5].text = findings
-
-    doc.add_paragraph("")
-    h3 = doc.add_heading("3. Detailed Error & Remediation Register", level=2)
-    h3.style.font.color.rgb = RGBColor(0, 51, 102)
-    if errs:
-        t_err = doc.add_table(rows=1, cols=4)
-        t_err.alignment = WD_TABLE_ALIGNMENT.CENTER
-        t_err.style = "Table Grid"
-        for idx, text in enumerate(["Issue Category", "Severity", "Finding Description", "Corrective Action"]):
-            c = t_err.rows[0].cells[idx]
-            c.text = text
-            for p in c.paragraphs:
-                for r in p.runs:
-                    r.bold = True
-        for e in errs:
-            rc = t_err.add_row().cells
-            rc[0].text = str(e.get("category", "General"))
-            rc[1].text = str(e.get("severity", "Medium"))
-            rc[2].text = str(e.get("description", e.get("finding", "")))
-            rc[3].text = str(e.get("recommendation", e.get("remediation", "Revise content")))
-    else:
-        doc.add_paragraph("Zero critical defects identified. Manuscript approved for delivery.")
 
     doc.add_paragraph("\n" + "―" * 55)
     footer = doc.add_paragraph("Certified by University Academic Quality Board & SME Review Panel")
@@ -410,7 +438,6 @@ def build_prompt_audit_docx(audit_data: dict, deliverable_type: str = "SLM", uni
             for p in cell.paragraphs:
                 for r in p.runs:
                     r.bold = True
-
         for item in checks:
             row = tbl.add_row().cells
             row[0].text = str(item.get("dimension", ""))
@@ -479,11 +506,9 @@ can_run_maker = user_role in ["Lead Administrator", "Content Author (Maker Team)
 can_run_checker = user_role in ["Lead Administrator", "Academic Reviewer (Checker & Auditor Team)", "SME Quality Reviewer (Checker)"]
 can_run_auditor = user_role in ["Lead Administrator", "Academic Reviewer (Checker & Auditor Team)", "Prompt Compliance Auditor"]
 
-# -------------------------------------------------------------
-# RESTORED: LEAD ADMINISTRATOR CONSOLE
-# -------------------------------------------------------------
+# Admin Console for Lead Admin
 if user_role == "Lead Administrator":
-    with st.sidebar.expander("🛠️ Admin Console (Institutions & User Roles)", expanded=True):
+    with st.sidebar.expander("🛠️ Admin Console (Institutions & User Roles)", expanded=False):
         st.markdown("##### 👤 Manage Team Roles & Permissions")
         target_colleague_email = st.text_input("Colleague Email (@upgrad.com)", placeholder="colleague@upgrad.com", key="admin_colleague_email")
         assigned_role = st.selectbox(
@@ -512,22 +537,15 @@ if user_role == "Lead Administrator":
                 save_university_to_config(new_uni_name.strip())
                 st.success(f"Added: {new_uni_name.strip()}")
                 st.rerun()
-            else:
-                st.warning("Please enter university name.")
 
-        with st.popover("📋 View Registered Directory"):
-            cfg_now = load_access_config()
-            st.json(cfg_now.get("users", {}))
-
+# Editable Audit Scope Mapping
 st.sidebar.divider()
 st.sidebar.header("🏛️ Audit Scope Mapping")
 
-# Fetch current universities from config
 known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
 if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
     known_unis = access_cfg["universities"]
 
-# 1. University Selection & Inline Creation
 uni_options = known_unis + ["➕ Register New University..."]
 selected_uni_choice = st.sidebar.selectbox("1. University / Governing Body", uni_options, index=0)
 
@@ -538,30 +556,25 @@ if selected_uni_choice == "➕ Register New University...":
             save_university_to_config(new_uni_input)
             st.sidebar.success(f"Added {new_uni_input}!")
             st.rerun()
-        else:
-            st.sidebar.warning("Please enter a valid university name.")
     selected_university = new_uni_input if new_uni_input else "Custom University"
 else:
     selected_university = selected_uni_choice
 
-# 2. Programme Selection & Custom Attributes
 prog_choices = DEFAULT_PROGRAMS + ["➕ Add Custom Programme / Degree..."]
 selected_prog_choice = st.sidebar.selectbox("2. Academic Programme / Degree", prog_choices, index=0)
 
 if selected_prog_choice == "➕ Add Custom Programme / Degree...":
-    custom_prog_name = st.sidebar.text_input("Programme Name", placeholder="e.g., Master in Artificial Intelligence").strip()
+    custom_prog_name = st.sidebar.text_input("Programme Name", placeholder="e.g., Master in AI").strip()
     selected_program = custom_prog_name if custom_prog_name else "Custom Academic Programme"
 else:
     selected_program = selected_prog_choice
 
-# 3. Dynamic Custom Programme Fields (Editable on the fly)
-with st.sidebar.expander("⚙️ Programme Metadata & Custom Attributes", expanded=True):
+with st.sidebar.expander("⚙️ Programme Metadata & Custom Attributes", expanded=False):
     prog_code = st.text_input("Programme Code", value="N/A", placeholder="e.g., MBA-AI-2026")
     prog_specialization = st.text_input("Specialization / Track", value="General", placeholder="e.g., Financial Analytics")
     prog_department = st.text_input("School / Department", value="Academic Affairs", placeholder="e.g., School of Business")
 
-# 4. Cohort, Term & Deliverable Mapping
-selected_batch = st.sidebar.text_input("3. Batch / Cohort", value=st.session_state.active_batch, placeholder="e.g., Cohort 15 (Jan 2026)")
+selected_batch = st.sidebar.text_input("3. Batch / Cohort", value=st.session_state.active_batch)
 selected_term = st.sidebar.selectbox("4. Semester / Academic Term", [
     "Semester 1", "Semester 2", "Semester 3", "Semester 4", 
     "Semester 5", "Semester 6", "Year 1", "Year 2", "Executive Term 1"
@@ -569,36 +582,6 @@ selected_term = st.sidebar.selectbox("4. Semester / Academic Term", [
 selected_deliverable = st.sidebar.selectbox("5. Deliverable Under Review", [
     "SLM", "PPT", "Question Bank", "MCQ", "FAQs & Misconceptions Review"
 ], index=0)
-
-# Active Metadata Package to pass down to reports
-active_metadata = {
-    "code": prog_code.strip() or "N/A",
-    "specialization": prog_specialization.strip() or "General",
-    "department": prog_department.strip() or "Academic Affairs"
-}
-
-st.sidebar.caption(
-    f"📌 **Scope Tag:** `{selected_university}` ➔ `{selected_program}` (`{active_metadata['specialization']}`)"
-)
-
-known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
-if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
-    known_unis = access_cfg["universities"]
-
-selected_university = st.sidebar.selectbox("University", known_unis, index=0)
-
-prog_choices = DEFAULT_PROGRAMS + ["➕ Other / Custom Programme..."]
-selected_program_choice = st.sidebar.selectbox("Program / Discipline", prog_choices, index=0)
-
-if selected_program_choice == "➕ Other / Custom Programme...":
-    custom_prog = st.sidebar.text_input("Enter Programme Name", placeholder="e.g., Master in AI").strip()
-    selected_program = custom_prog if custom_prog else "Custom Academic Programme"
-else:
-    selected_program = selected_program_choice
-
-selected_batch = st.sidebar.text_input("Batch / Cohort", value=st.session_state.active_batch)
-selected_term = st.sidebar.selectbox("Semester / Term", ["Semester 1", "Semester 2", "Semester 3", "Semester 4", "Year 1", "Year 2"], index=0)
-selected_deliverable = st.sidebar.selectbox("Deliverable Format Under Review", ["SLM", "PPT", "Question Bank", "MCQ", "FAQs & Misconceptions Review"], index=0)
 
 # -------------------------------------------------------------
 # MAIN APP: REVIEW-FIRST INTERFACE
@@ -627,24 +610,42 @@ with st.expander("📚 Load Manuscript from Shared Depository", expanded=False):
     else:
         st.info("No manuscripts in depository yet.")
 
-# MAIN REVIEW WORKSPACE: INGESTION
+# INGESTION: MULTI-FILE & MULTI-FORMAT
 st.markdown("---")
 st.subheader("1. Ingest Content for Review & Audit")
 
 tab_upload, tab_paste, tab_maker = st.tabs([
-    "📂 Direct Upload (.DOCX / .TXT)", 
+    "📂 Direct Upload (.DOCX, .PDF, .XLSX, .TXT)", 
     "✍️ Paste Manuscript Text", 
     "🤖 Run Stage 1 AI Maker (Optional)"
 ])
 
 with tab_upload:
-    uploaded_draft = st.file_uploader("Upload Manuscript File to Audit Directly", type=["docx", "txt"], key="rev_uploader")
-    if uploaded_draft:
-        extracted = extract_text_safely(uploaded_draft)
-        if extracted.strip():
-            st.session_state.draft_text = extracted
+    uploaded_files = st.file_uploader(
+        "Upload Manuscript File(s) to Audit Directly (Select one or multiple files):", 
+        type=["docx", "pdf", "xlsx", "xls", "txt"], 
+        accept_multiple_files=True,
+        key="rev_multi_uploader"
+    )
+    if uploaded_files:
+        combined_text_blocks = []
+        file_summary = []
+        for f in uploaded_files:
+            content = extract_content_multi_format(f)
+            if content.strip():
+                combined_text_blocks.append(
+                    f"\n\n======================================================\n"
+                    f"ATTACHED FILE ARTIFACT: {f.name}\n"
+                    f"======================================================\n"
+                    f"{content}"
+                )
+                file_summary.append(f"• **{f.name}** ({len(content.split())} words)")
+        
+        if combined_text_blocks:
+            st.session_state.draft_text = "\n".join(combined_text_blocks)
             st.session_state.loaded_manuscript_id = None
-            st.success(f"Loaded '{uploaded_draft.name}' ({len(extracted.split())} words ready for review).")
+            st.success(f"Loaded {len(uploaded_files)} file artifact(s) into consolidated audit packet:")
+            st.markdown("\n".join(file_summary))
 
 with tab_paste:
     pasted_draft = st.text_area("Paste Full Manuscript Text Here", value=st.session_state.draft_text, height=180, key="rev_paster")
@@ -668,18 +669,18 @@ with tab_maker:
     else:
         st.info("Stage 1 generation is reserved for Content Authors and Lead Administrators.")
 
-# Reference Syllabus for Verification
-st.markdown("#### Prescribed Syllabus & Benchmark Reference (For Mapping Audit)")
+# Reference Syllabus for Specific Cross-Verification
+st.markdown("#### 🎯 Prescribed Syllabus (For Granular Topic-by-Topic Comparison)")
 col_syl, col_ref = st.columns(2)
 with col_syl:
-    audit_syl_file = st.file_uploader("Upload Prescribed Syllabus Outline (.docx, .txt)", type=["docx", "txt"], key="rev_syl_file")
-    audit_syl_manual = st.text_area("Or Paste Syllabus Topics", placeholder="Unit 1: Concept, Unit 2: Frameworks...", height=100)
-    audit_syl = extract_text_safely(audit_syl_file) if audit_syl_file else audit_syl_manual.strip()
+    audit_syl_file = st.file_uploader("Upload Prescribed Syllabus (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="rev_syl_file")
+    audit_syl_manual = st.text_area("Or Paste Prescribed Syllabus Topics Here", placeholder="Unit 1: Foundations...\nUnit 2: Methodologies...\nUnit 3: Governance...", height=100)
+    audit_syl = extract_content_multi_format(audit_syl_file) if audit_syl_file else audit_syl_manual.strip()
 
 with col_ref:
-    audit_ref_file = st.file_uploader("Upload Benchmark Textbook Reference (.docx, .txt)", type=["docx", "txt"], key="rev_ref_file")
-    audit_ref_manual = st.text_area("Or Paste Benchmark References", placeholder="Source references...", height=100)
-    audit_ref = extract_text_safely(audit_ref_file) if audit_ref_file else audit_ref_manual.strip()
+    audit_ref_file = st.file_uploader("Upload Benchmark Textbook Reference (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="rev_ref_file")
+    audit_ref_manual = st.text_area("Or Paste Benchmark References", placeholder="Core textbook citations and source references...", height=100)
+    audit_ref = extract_content_multi_format(audit_ref_file) if audit_ref_file else audit_ref_manual.strip()
 
 # -------------------------------------------------------------
 # AUDIT EXECUTION CONTROLS
@@ -702,7 +703,7 @@ with col_btn1:
 
 with col_btn2:
     run_stage2_only = st.button(
-        "Step 2: 12-QA Checker Only",
+        "Step 2: 12-QA & Syllabus Cross-Check Only",
         disabled=(not can_run_checker or not has_draft),
         use_container_width=True
     )
@@ -716,13 +717,13 @@ with col_btn3:
 
 # Execution Logic
 if run_all_audits or run_stage2_only:
-    with st.spinner("Executing Stage 2: 12-Parameter Academic Quality & Syllabus Audit..."):
+    with st.spinner("Executing Stage 2: 12-Parameter Quality Audit & Topic-by-Topic Syllabus Cross-Comparison..."):
         try:
             res_s2 = run_stage_2_checker(st.session_state.draft_text, audit_syl, audit_ref)
             st.session_state.stage2_results = res_s2
             if st.session_state.loaded_manuscript_id:
                 update_manuscript_review(st.session_state.loaded_manuscript_id, user_email, stage2_results=res_s2)
-            st.success("Stage 2 QA Audit complete!")
+            st.success("Stage 2 QA & Syllabus Audit complete!")
         except Exception as e:
             st.error(f"Stage 2 Failed: {e}")
 
@@ -771,7 +772,7 @@ if s2 or s3:
     with col_d1:
         if stream_s2_xlsx:
             st.download_button(
-                label="📊 12-QA Evaluation Workbook (.XLSX)",
+                label="📊 12-QA & Syllabus Workbook (.XLSX)",
                 data=stream_s2_xlsx,
                 file_name=f"{file_prefix}_12_QA_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -796,13 +797,31 @@ if s2 or s3:
                 use_container_width=True
             )
 
-    tab_matrix, tab_s3, tab_preview = st.tabs([
-        "📋 12-Parameter Matrix & Error Register", 
-        "🔍 Prompt Compliance & Structural Drift", 
+    # Detailed Inspection Tabs
+    tab_syl_matrix, tab_12qa, tab_s3, tab_preview = st.tabs([
+        "🎯 Syllabus vs Content Matrix",
+        "📋 12-Parameter Matrix & Defects", 
+        "🔍 Prompt Compliance & Drift", 
         "📄 Manuscript Content Preview"
     ])
 
-    with tab_matrix:
+    with tab_syl_matrix:
+        if s2 and "syllabus_mapping" in s2 and s2["syllabus_mapping"]:
+            st.markdown("##### 📌 Topic-by-Topic Syllabus Coverage & Gap Analysis")
+            df_syl = pd.DataFrame(s2["syllabus_mapping"])
+            display_cols = {
+                "topic": "Syllabus Topic / Objective",
+                "status": "Coverage Status",
+                "depth": "Pedagogical Depth",
+                "content_location": "Manuscript Location",
+                "gap_analysis": "Auditor Remarks & Gap Analysis"
+            }
+            df_syl_disp = df_syl.rename(columns=display_cols)
+            st.dataframe(df_syl_disp, use_container_width=True)
+        elif s2:
+            st.info("No external syllabus was supplied during this run; evaluated against internal pedagogical structure.")
+
+    with tab_12qa:
         if s2:
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Audit Score", f"{s2.get('score', 0.0)} / 100")
