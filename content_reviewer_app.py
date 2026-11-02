@@ -522,6 +522,65 @@ if user_role == "Lead Administrator":
 st.sidebar.divider()
 st.sidebar.header("🏛️ Audit Scope Mapping")
 
+# Fetch current universities from config
+known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
+if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
+    known_unis = access_cfg["universities"]
+
+# 1. University Selection & Inline Creation
+uni_options = known_unis + ["➕ Register New University..."]
+selected_uni_choice = st.sidebar.selectbox("1. University / Governing Body", uni_options, index=0)
+
+if selected_uni_choice == "➕ Register New University...":
+    new_uni_input = st.sidebar.text_input("Enter New University Name", placeholder="e.g., Apex Global University").strip()
+    if st.sidebar.button("💾 Save University to Scope", use_container_width=True):
+        if new_uni_input:
+            save_university_to_config(new_uni_input)
+            st.sidebar.success(f"Added {new_uni_input}!")
+            st.rerun()
+        else:
+            st.sidebar.warning("Please enter a valid university name.")
+    selected_university = new_uni_input if new_uni_input else "Custom University"
+else:
+    selected_university = selected_uni_choice
+
+# 2. Programme Selection & Custom Attributes
+prog_choices = DEFAULT_PROGRAMS + ["➕ Add Custom Programme / Degree..."]
+selected_prog_choice = st.sidebar.selectbox("2. Academic Programme / Degree", prog_choices, index=0)
+
+if selected_prog_choice == "➕ Add Custom Programme / Degree...":
+    custom_prog_name = st.sidebar.text_input("Programme Name", placeholder="e.g., Master in Artificial Intelligence").strip()
+    selected_program = custom_prog_name if custom_prog_name else "Custom Academic Programme"
+else:
+    selected_program = selected_prog_choice
+
+# 3. Dynamic Custom Programme Fields (Editable on the fly)
+with st.sidebar.expander("⚙️ Programme Metadata & Custom Attributes", expanded=True):
+    prog_code = st.text_input("Programme Code", value="N/A", placeholder="e.g., MBA-AI-2026")
+    prog_specialization = st.text_input("Specialization / Track", value="General", placeholder="e.g., Financial Analytics")
+    prog_department = st.text_input("School / Department", value="Academic Affairs", placeholder="e.g., School of Business")
+
+# 4. Cohort, Term & Deliverable Mapping
+selected_batch = st.sidebar.text_input("3. Batch / Cohort", value=st.session_state.active_batch, placeholder="e.g., Cohort 15 (Jan 2026)")
+selected_term = st.sidebar.selectbox("4. Semester / Academic Term", [
+    "Semester 1", "Semester 2", "Semester 3", "Semester 4", 
+    "Semester 5", "Semester 6", "Year 1", "Year 2", "Executive Term 1"
+], index=0)
+selected_deliverable = st.sidebar.selectbox("5. Deliverable Under Review", [
+    "SLM", "PPT", "Question Bank", "MCQ", "FAQs & Misconceptions Review"
+], index=0)
+
+# Active Metadata Package to pass down to reports
+active_metadata = {
+    "code": prog_code.strip() or "N/A",
+    "specialization": prog_specialization.strip() or "General",
+    "department": prog_department.strip() or "Academic Affairs"
+}
+
+st.sidebar.caption(
+    f"📌 **Scope Tag:** `{selected_university}` ➔ `{selected_program}` (`{active_metadata['specialization']}`)"
+)
+
 known_unis = ["State Open University", "National Distance University", "Central Higher Education Institute"]
 if isinstance(access_cfg, dict) and "universities" in access_cfg and access_cfg["universities"]:
     known_unis = access_cfg["universities"]
