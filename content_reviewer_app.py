@@ -11,6 +11,8 @@ from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
 
 # Modular Project Services
 from services.access_manager import load_access_config, verify_user
@@ -120,8 +122,19 @@ def extract_content_multi_format(uploaded_file) -> str:
         except Exception:
             pass
 
-    # 2. PDF Documents (.pdf)
+   # 2. PDF Documents (.pdf)
     if fname.endswith(".pdf") or (isinstance(raw_bytes, bytes) and raw_bytes.startswith(b"%PDF")):
+        if PdfReader is None:
+            return "[Notice: PDF parser library 'pypdf' is initializing on server. Upload .DOCX or .TXT, or reboot app with clear cache.]"
+        try:
+            reader = PdfReader(io.BytesIO(raw_bytes))
+            for p_idx, page in enumerate(reader.pages):
+                txt = page.extract_text()
+                if txt and txt.strip():
+                    text_output.append(f"[Page {p_idx + 1}]\n{txt.strip()}")
+            return "\n\n".join(text_output)
+        except Exception:
+            pass
         try:
             reader = PdfReader(io.BytesIO(raw_bytes))
             for p_idx, page in enumerate(reader.pages):
