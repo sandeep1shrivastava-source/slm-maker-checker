@@ -1,0 +1,12 @@
+{
+    "allowed_domain": "upgrad.com",
+    "universities": [
+        "State Open University",
+        "National Distance University",
+        "Central Higher Education Institute"
+    ],
+    "users": {
+        "sandeep1.shrivastava@upgrad.com": "Lead Administrator",
+        "admin@upgrad.com": "Lead Administrator"
+    }
+}
