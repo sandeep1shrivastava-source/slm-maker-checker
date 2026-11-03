@@ -64,6 +64,36 @@ DEFAULT_PROGRAMS = [
 ]
 
 # -------------------------------------------------------------
+# AUTOMATION FORMATTING GUIDELINES FOR AI MAKER
+# -------------------------------------------------------------
+FORMATTING_GUIDELINES = """
+MANDATORY FORMATTING STANDARDS FOR ACADEMIC GENERATION:
+Depending on the deliverable requested, you MUST adhere strictly to the following structural constraints.
+
+1. For SLM (Self-Learning Material):
+- Unit Title: Clear, action-oriented.
+- Learning Objectives: 3 to 5 objectives explicitly using Bloom's Taxonomy verbs (e.g., Define, Analyze, Evaluate).
+- Introduction: Contextual setup bridging previous concepts.
+- Core Concepts (Body): Use proper Markdown sub-headings (## and ###).
+- Case Studies: Minimum one industry-relevant example, MUST be formatted as a blockquote (>) so the engine can wrap it in a branded callout box.
+- Summary / Key Takeaways: Bulleted synthesis.
+- Self-Assessment Questions (SAQs): 3 to 5 formative questions.
+
+2. For MCQ & Question Banks:
+- Stem Clarity: Unambiguous sentence, no double negatives.
+- Options: Exactly four options (A, B, C, D). Avoid 'All of the above' or 'None of the above'.
+- Cognitive Distribution: 40% Recall/Understand, 40% Apply/Analyze, 20% Evaluate/Create.
+- Mandatory Rationale: Every MCQ must include a 'Correct Answer' key and a detailed 'Explanation/Rationale'.
+
+3. For PPT / Slides:
+- Rule of Six: Max 6 bullet points per slide; max 6 words per line.
+- No Text Walls: Do not generate dense paragraphs. Use visual cues and bolding.
+- Slide Progression: Title Slide -> Unit Objectives -> Concept Slides -> Case Study Slide -> Summary -> Q&A.
+- Speaker Notes: Every slide MUST contain detailed, descriptive speaker notes formatted as blockquotes (>).
+- Markdown Mapping: Use ## for New Slide (Title and Content), ### for Slide Titles, - for bullet points, and > for Speaker notes.
+"""
+
+# -------------------------------------------------------------
 # DYNAMIC CONFIG & FEATURE FLAG PERSISTENCE
 # -------------------------------------------------------------
 def get_config_file_path():
@@ -620,8 +650,9 @@ if can_maker and not is_lead_admin:
 
         if st.button("🤖 Generate Draft Manuscript (Stage 1 Maker)", type="primary"):
             if m_syllabus.strip():
-                with st.spinner("AI Maker generating academic manuscript..."):
-                    gen_m = run_stage_1_maker(m_syllabus, m_reference, "Postgraduate", selected_deliverable)
+                with st.spinner("AI Maker generating academic manuscript according to strict institutional guidelines..."):
+                    enhanced_ref = f"{m_reference}\n\n{FORMATTING_GUIDELINES}"
+                    gen_m = run_stage_1_maker(m_syllabus, enhanced_ref, "Postgraduate", selected_deliverable)
                     if gen_m and str(gen_m).strip():
                         st.session_state["maker_draft_input"] = str(gen_m)
                         st.session_state.draft_text = str(gen_m)
@@ -893,8 +924,9 @@ else:
 
         if st.button("🤖 Generate Draft Manuscript", type="primary", key="adm_maker_btn"):
             if adm_syl.strip():
-                with st.spinner("Generating draft manuscript..."):
-                    gen_adm = run_stage_1_maker(adm_syl, adm_ref, "Postgraduate", selected_deliverable)
+                with st.spinner("Generating draft manuscript according to strict institutional guidelines..."):
+                    enhanced_adm_ref = f"{adm_ref}\n\n{FORMATTING_GUIDELINES}"
+                    gen_adm = run_stage_1_maker(adm_syl, enhanced_adm_ref, "Postgraduate", selected_deliverable)
                     if gen_adm and str(gen_adm).strip():
                         st.session_state["admin_maker_draft_input"] = str(gen_adm)
                         st.session_state.draft_text = str(gen_adm)
