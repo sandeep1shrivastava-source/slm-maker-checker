@@ -761,7 +761,7 @@ else:
         else:
             st.info("No manuscripts currently in depository.")
 
-   with t_maker_prev:
+    with t_maker_prev:
         st.markdown("##### ✍️ Admin Maker Studio (Draft & Deposit Directly)")
         col_am1, col_am2 = st.columns(2)
         with col_am1:
@@ -826,44 +826,3 @@ else:
             c4.metric("Verdict", s2.get("decision", "PASS"))
             xl = build_stage2_qa_excel(s2, selected_university, selected_program, selected_deliverable, selected_batch, selected_term)
             st.download_button("📊 Download Audit Workbook (.XLSX)", data=xl, file_name="QA_Audit_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-        col_ad_u1, col_ad_u2 = st.columns(2)
-        with col_ad_u1:
-            admin_up_files = st.file_uploader(
-                "Upload Manuscript (.DOCX, .PDF, .XLSX, .TXT):", 
-                type=["docx", "pdf", "xlsx", "xls", "txt"], 
-                accept_multiple_files=True,
-                key="admin_chk_up"
-            )
-            if admin_up_files:
-                parsed = [f"=== FILE: {f.name} ===\n{extract_content_multi_format(f)}" for f in admin_up_files]
-                st.session_state.draft_text = "\n\n".join(parsed)
-                st.success(f"Ingested {len(admin_up_files)} file(s).")
-
-        with col_ad_u2:
-            admin_syl_file = st.file_uploader("Upload Prescribed Syllabus:", type=["docx", "pdf", "txt"], key="admin_syl_up")
-            admin_syl_txt = st.text_area("Or Paste Syllabus Units", height=68, key="admin_syl_txt")
-            admin_syl = extract_content_multi_format(admin_syl_file) if admin_syl_file else admin_syl_txt
-
-        if st.session_state.draft_text.strip():
-            if st.button("⚡ Run Stage 2 Academic QA & Syllabus Cross-Check (Admin)", type="primary"):
-                with st.spinner("Auditing manuscript..."):
-                    res = run_stage_2_checker(st.session_state.draft_text, admin_syl, "")
-                    st.session_state.stage2_results = res
-                    st.success("Audit complete!")
-
-        if st.session_state.stage2_results:
-            s2 = st.session_state.stage2_results
-            ca1, ca2, ca3, ca4 = st.columns(4)
-            ca1.metric("Score", f"{s2.get('score', 0)}/100")
-            ca2.metric("Syllabus Coverage", f"{s2.get('coverage_pct', 0)}%")
-            ca3.metric("Critical Defects", s2.get("critical_count", 0))
-            ca4.metric("Verdict", s2.get("decision", "PASS"))
-
-            df_map = pd.DataFrame(s2.get("syllabus_mapping", []))
-            if not df_map.empty:
-                st.markdown("###### Syllabus vs Content Mapping")
-                st.dataframe(df_map, use_container_width=True)
-
-            xl_stream = build_stage2_qa_excel(s2, selected_university, selected_program, selected_deliverable, selected_batch, selected_term)
-            st.download_button("📊 Download Audit Workbook (.XLSX)", data=xl_stream, file_name=f"{selected_university}_QA_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
