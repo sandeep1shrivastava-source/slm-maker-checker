@@ -2,6 +2,11 @@ import io
 import json
 import os
 import zipfile
+import time
+import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import streamlit as st
 import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -145,6 +150,51 @@ def save_feature_flags(flags: dict):
         feat.update(flags)
         return cfg
     update_system_config(fn)
+
+# -------------------------------------------------------------
+# EMAIL OTP DISPATCH ENGINE
+# -------------------------------------------------------------
+def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
+    """Dispatches a 6-digit OTP via SMTP with an automatic Dev Mode fallback."""
+    smtp_cfg = st.secrets.get("smtp", {})
+    server_host = smtp_cfg.get("server", "smtp.gmail.com")
+    server_port = int(smtp_cfg.get("port", 587))
+    sender_email = smtp_cfg.get("sender_email", "")
+    sender_password = smtp_cfg.get("sender_password", "")
+
+    # Dev/Test fallback: displays OTP on-screen if SMTP is not yet configured in Secrets
+    if not sender_email or not sender_password:
+        st.sidebar.warning(f"⚠️ [Dev Mode active]: Test OTP is **{otp_code}**")
+        return True
+
+    msg = MIMEMultipart()
+    msg["From"] = f"Academic Quality Console <{sender_email}>"
+    msg["To"] = recipient_email
+    msg["Subject"] = f"Your Login Code: {otp_code}"
+
+    body = f"""Hello,
+
+Your One-Time Password (OTP) for the Academic Publishing & QA Console is:
+
+    ========================================
+                    {otp_code}
+    ========================================
+
+This code expires in 5 minutes. If you did not request this code, contact your Lead Administrator.
+
+Academic Publishing & QA Pipeline
+"""
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP(server_host, server_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        return True
+    except Exception as err:
+        st.sidebar.error(f"Failed to dispatch OTP email: {err}")
+        return False
 
 # -------------------------------------------------------------
 # MULTI-FORMAT EXTRACTION (.DOCX, .PDF, .XLSX, .TXT)
@@ -505,7 +555,7 @@ def build_stage2_qa_docx(stage2_data: dict, university: str, program: str, deliv
     return out
 
 # -------------------------------------------------------------
-# SESSION STATE & AUTHENTICATION
+# SESSION STATE & OTP AUTHENTICATION GATEWAY
 # -------------------------------------------------------------
 sys_cfg = load_system_config()
 feat_flags = sys_cfg.get("features", {
@@ -513,6 +563,15 @@ feat_flags = sys_cfg.get("features", {
     "branding_mapper_enabled": True,
     "allow_direct_checker_upload": True
 })
+
+if "auth_user" not in st.session_state: st.session_state.auth_user = None
+if "auth_role" not in st.session_state: st.session_state.auth_role = None
+if "otp_sent" not in st.session_state: st.session_state.otp_sent = False
+if "generated_otp" not in st.session_state: st.session_state.generated_otp = None
+if "otp_expiry" not in st.session_state: st.session_state.otp_expiry = 0
+if "otp_attempts" not in st.session_state: st.session_state.otp_attempts = 0
+if "temp_email" not in st.session_state: st.session_state.temp_email = ""
+if "temp_role" not in st.session_state: st.session_state.temp_role = None
 
 if "draft_text" not in st.session_state: st.session_state.draft_text = ""
 if "stage2_results" not in st.session_state: st.session_state.stage2_results = None
@@ -523,21 +582,88 @@ if "active_batch" not in st.session_state: st.session_state.active_batch = "Batc
 if "active_term" not in st.session_state: st.session_state.active_term = "Semester 1"
 
 st.sidebar.header("🔐 Workspace Login")
-user_email = st.sidebar.text_input(
-    "Enter Official Email ID (@upgrad.com)", 
-    value="sandeep1.shrivastava@upgrad.com"
-).strip().lower()
 
-if not user_email.endswith("@upgrad.com"):
-    st.sidebar.error("⛔ Access Denied: Only official '@upgrad.com' accounts permitted.")
+if not st.session_state.auth_user:
+    # --- PHASE 1: SUBMIT EMAIL FOR OTP ---
+    if not st.session_state.otp_sent:
+        login_email = st.sidebar.text_input(
+            "Enter Official Email ID (@upgrad.com)", 
+            placeholder="name@upgrad.com",
+            key="login_email_input"
+        ).strip().lower()
+
+        if st.sidebar.button("📩 Send Login OTP", type="primary", use_container_width=True):
+            if not login_email.endswith("@upgrad.com"):
+                st.sidebar.error("⛔ Access Denied: Only official '@upgrad.com' accounts permitted.")
+            else:
+                is_authorized, user_role = verify_user(login_email)
+                if not is_authorized:
+                    st.sidebar.error("⛔ Account not registered. Please contact the Lead Administrator.")
+                else:
+                    new_code = str(random.randint(100000, 999999))
+                    st.session_state.generated_otp = new_code
+                    st.session_state.otp_expiry = time.time() + 300  # 5-minute validity
+                    st.session_state.temp_email = login_email
+                    st.session_state.temp_role = user_role
+                    st.session_state.otp_attempts = 0
+
+                    with st.sidebar.spinner("Dispatching verification code..."):
+                        if dispatch_email_otp(login_email, new_code):
+                            st.session_state.otp_sent = True
+                            st.sidebar.success(f"Code sent to {login_email}!")
+                            st.rerun()
+
+    # --- PHASE 2: VERIFY OTP CODE ---
+    else:
+        st.sidebar.info(f"Code sent to **{st.session_state.temp_email}** (Valid for 5 mins)")
+        entered_code = st.sidebar.text_input("Enter 6-Digit OTP", max_chars=6, key="entered_otp_input")
+        
+        col_v1, col_v2 = st.sidebar.columns(2)
+        with col_v1:
+            if st.button("🔓 Verify & Login", type="primary", use_container_width=True):
+                if time.time() > st.session_state.otp_expiry:
+                    st.sidebar.error("OTP expired. Please request a new code.")
+                    st.session_state.otp_sent = False
+                    st.session_state.generated_otp = None
+                    st.rerun()
+                elif st.session_state.otp_attempts >= 3:
+                    st.sidebar.error("Too many failed attempts. Please request a new code.")
+                    st.session_state.otp_sent = False
+                    st.session_state.generated_otp = None
+                    st.rerun()
+                elif entered_code.strip() == st.session_state.generated_otp:
+                    st.session_state.auth_user = st.session_state.temp_email
+                    st.session_state.auth_role = st.session_state.temp_role
+                    st.session_state.otp_sent = False
+                    st.session_state.generated_otp = None
+                    st.sidebar.success("Identity verified!")
+                    st.rerun()
+                else:
+                    st.session_state.otp_attempts += 1
+                    remaining = 3 - st.session_state.otp_attempts
+                    st.sidebar.error(f"Invalid code. {remaining} attempt(s) remaining.")
+
+        with col_v2:
+            if st.button("↩️ Cancel", use_container_width=True):
+                st.session_state.otp_sent = False
+                st.session_state.generated_otp = None
+                st.rerun()
+
+    # Stop execution completely if not authenticated
     st.stop()
 
-is_authorized, user_role = verify_user(user_email)
-if not is_authorized:
-    st.sidebar.error("⛔ Access Denied: Unauthorized Account.")
-    st.stop()
+# --- AUTHENTICATED SESSION CONTEXT ---
+user_email = st.session_state.auth_user
+user_role = st.session_state.auth_role
 
-st.sidebar.success(f"Verified Role: **{user_role}**")
+st.sidebar.success(f"Verified: **{user_email}**")
+st.sidebar.caption(f"Role: **{user_role}**")
+if st.sidebar.button("🚪 Logout", use_container_width=True):
+    st.session_state.auth_user = None
+    st.session_state.auth_role = None
+    st.session_state.otp_sent = False
+    st.session_state.generated_otp = None
+    st.rerun()
 
 # Role Isolation Flags
 is_lead_admin = (user_role == "Lead Administrator")
