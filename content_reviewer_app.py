@@ -761,12 +761,71 @@ else:
         else:
             st.info("No manuscripts currently in depository.")
 
-    with t_maker_prev:
-        st.caption("Preview of what Content Authors experience when Maker Studio is enabled.")
-        st.markdown("• AI Draft Generation\n• Variable Institutional Brand Mapper\n• Pre-Flight 12-QA Self-Audit")
+   with t_maker_prev:
+        st.markdown("##### ✍️ Admin Maker Studio (Draft & Deposit Directly)")
+        col_am1, col_am2 = st.columns(2)
+        with col_am1:
+            adm_syl_file = st.file_uploader("Upload Syllabus (.docx, .pdf, .txt)", type=["docx", "pdf", "txt"], key="adm_maker_syl")
+            adm_syl_txt = st.text_area("Or Paste Unit Syllabus Topics", height=90, key="adm_maker_syl_txt")
+            adm_syl = extract_content_multi_format(adm_syl_file) if adm_syl_file else adm_syl_txt
+        with col_am2:
+            adm_ref_file = st.file_uploader("Upload Benchmark Textbook Reference", type=["docx", "pdf", "txt"], key="adm_maker_ref")
+            adm_ref_txt = st.text_area("Or Paste Reference Excerpts", height=90, key="adm_maker_ref_txt")
+            adm_ref = extract_content_multi_format(adm_ref_file) if adm_ref_file else adm_ref_txt
+
+        if st.button("🤖 Generate Draft Manuscript", type="primary", key="adm_maker_btn"):
+            if adm_syl.strip():
+                with st.spinner("Generating draft manuscript..."):
+                    st.session_state.draft_text = run_stage_1_maker(adm_syl, adm_ref, "Postgraduate", selected_deliverable)
+                    st.success("Draft Generated! Review below.")
+            else:
+                st.warning("Please supply a syllabus outline.")
+
+        st.session_state.draft_text = st.text_area("Manuscript Text / Editor", value=st.session_state.draft_text, height=220, key="adm_maker_editor")
+
+        col_sub1, col_sub2 = st.columns(2)
+        with col_sub1:
+            if st.button("📤 Submit Draft to Depository Queue", use_container_width=True):
+                if st.session_state.draft_text.strip():
+                    new_id = save_manuscript_draft(selected_university, selected_program, selected_batch, selected_deliverable, user_email, st.session_state.draft_text)
+                    st.success(f"Manuscript submitted successfully as ID: {new_id}!")
+                    st.rerun()
+                else:
+                    st.warning("Draft is empty.")
+        with col_sub2:
+            if st.session_state.draft_text.strip():
+                profile = {"university": selected_university, "program": selected_program, "deliverable": selected_deliverable, "font": "Calibri", "body_size": 11.0, "primary_color": "002060", "accent_color": "C09A3E", "callout_boxes": True}
+                st.download_button("📥 Download Branded Word (.DOCX)", data=build_branded_manuscript_docx(st.session_state.draft_text, profile), file_name=f"{selected_university}_Draft.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document", use_container_width=True)
 
     with t_checker_prev:
-        st.markdown("##### 🔍 Live Checker Audit Console (Admin Direct Run)")
+        st.markdown("##### 🔍 Admin Direct Audit & Review")
+        col_ac1, col_ac2 = st.columns(2)
+        with col_ac1:
+            adm_chk_files = st.file_uploader("Upload Manuscript Files (.DOCX, .PDF, .XLSX, .TXT):", type=["docx", "pdf", "xlsx", "xls", "txt"], accept_multiple_files=True, key="adm_chk_up")
+            if adm_chk_files:
+                st.session_state.draft_text = "\n\n".join([f"=== FILE: {f.name} ===\n{extract_content_multi_format(f)}" for f in adm_chk_files])
+                st.success(f"Loaded {len(adm_chk_files)} file(s).")
+        with col_ac2:
+            adm_csyl_file = st.file_uploader("Upload Approved Syllabus for Cross-Check:", type=["docx", "pdf", "txt"], key="adm_chk_syl")
+            adm_csyl_txt = st.text_area("Or Paste Approved Syllabus", height=68, key="adm_chk_syl_txt")
+            adm_csyl = extract_content_multi_format(adm_csyl_file) if adm_csyl_file else adm_csyl_txt
+
+        if st.session_state.draft_text.strip():
+            if st.button("⚡ Run Stage 2 Academic QA & Syllabus Cross-Check", type="primary", key="adm_chk_run"):
+                with st.spinner("Auditing against 12 parameters and syllabus..."):
+                    res = run_stage_2_checker(st.session_state.draft_text, adm_csyl, "")
+                    st.session_state.stage2_results = res
+                    st.success("Audit complete!")
+
+        if st.session_state.stage2_results:
+            s2 = st.session_state.stage2_results
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Score", f"{s2.get('score', 0)}/100")
+            c2.metric("Coverage", f"{s2.get('coverage_pct', 0)}%")
+            c3.metric("Critical Defects", s2.get("critical_count", 0))
+            c4.metric("Verdict", s2.get("decision", "PASS"))
+            xl = build_stage2_qa_excel(s2, selected_university, selected_program, selected_deliverable, selected_batch, selected_term)
+            st.download_button("📊 Download Audit Workbook (.XLSX)", data=xl, file_name="QA_Audit_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         col_ad_u1, col_ad_u2 = st.columns(2)
         with col_ad_u1:
