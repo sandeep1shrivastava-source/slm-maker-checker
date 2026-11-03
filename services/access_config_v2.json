@@ -1,0 +1,56 @@
+{
+    "allowed_domain": "upgrad.com",
+    "universities": [
+        "State Open University",
+        "National Distance University",
+        "Central Higher Education Institute",
+        "ATLAS University Mumbai"
+    ],
+    "university_programs": {
+        "State Open University": [
+            {
+                "name": "Master of Business Administration (MBA)",
+                "code": "MBA-GEN",
+                "specialization": "General Management & Strategy",
+                "department": "School of Business"
+            },
+            {
+                "name": "Master of Science (M.Sc) Data Science",
+                "code": "MSC-DS",
+                "specialization": "Applied AI & Data Analytics",
+                "department": "Department of Computer Science"
+            }
+        ],
+        "National Distance University": [
+            {
+                "name": "Master of Computer Applications (MCA)",
+                "code": "MCA-SE",
+                "specialization": "Software Architecture",
+                "department": "School of Information Technology"
+            }
+        ],
+        "Central Higher Education Institute": [
+            {
+                "name": "Bachelor of Commerce (B.Com)",
+                "code": "BCOM-AF",
+                "specialization": "Accounting & Finance",
+                "department": "School of Commerce"
+            }
+        ],
+        "ATLAS University Mumbai": [
+            {
+                "name": "Master in Business Administration",
+                "code": "MBA-101",
+                "specialization": "Finance",
+                "department": "School of Management"
+            }
+        ]
+    },
+    "users": {
+        "sandeep1.shrivastava@upgrad.com": {
+            "role": "Lead Administrator",
+            "password_hash": "be3348734f4e694ca27ad84cbf2b857dc2fffad6dfcce548cdcb7fff82c2ac8b",
+            "salt": "763b6fbcb37a4464543fdf257caf3574"
+        }
+    }
+}
