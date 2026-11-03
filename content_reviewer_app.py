@@ -739,7 +739,7 @@ else:
                 "Format": m.get("deliverable"),
                 "Author": m.get("author_email"),
                 "Status": m.get("status", "Pending Review"),
-                "Score": m.get("stage2_results", {}).get("score", "Not Evaluated")
+                "Score": (m.get("stage2_results") or {}).get("score", "Not Evaluated")
             } for m in all_m])
             st.dataframe(df_overview, use_container_width=True)
 
@@ -754,7 +754,7 @@ else:
                     st.text_area("Content", value=target_m.get("draft_text", ""), height=220, disabled=True)
                 with col_m2:
                     st.markdown("###### Checker QA Evaluation")
-                    st.json(target_m.get("stage2_results", {"notice": "No audit performed yet"}))
+                    st.json(target_m.get("stage2_results") or {"notice": "No audit performed yet"})
 
                 c_appr1, c_appr2 = st.columns(2)
                 with c_appr1:
