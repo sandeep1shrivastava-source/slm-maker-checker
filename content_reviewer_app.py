@@ -547,20 +547,29 @@ if can_maker and not is_lead_admin:
             m_ref_txt = st.text_area("Or Paste Reference Excerpts", placeholder="Prescribed citations and source materials...", height=110)
             m_reference = extract_content_multi_format(m_ref_file) if m_ref_file else m_ref_txt
 
+        if "maker_draft_input" not in st.session_state:
+            st.session_state["maker_draft_input"] = st.session_state.get("draft_text", "")
+
         if st.button("🤖 Generate Draft Manuscript (Stage 1 Maker)", type="primary"):
             if m_syllabus.strip():
                 with st.spinner("AI Maker generating academic manuscript..."):
-                    st.session_state.draft_text = run_stage_1_maker(m_syllabus, m_reference, "Postgraduate", selected_deliverable)
-                    st.success("Draft Generated! Review and refine below.")
+                    gen_m = run_stage_1_maker(m_syllabus, m_reference, "Postgraduate", selected_deliverable)
+                    if gen_m and str(gen_m).strip():
+                        st.session_state["maker_draft_input"] = str(gen_m)
+                        st.session_state.draft_text = str(gen_m)
+                        st.success("Draft Generated! Review and refine below.")
+                        st.rerun()
+                    else:
+                        st.error("AI Maker returned empty content. Please verify that GEMINI_API_KEY is active in Streamlit Cloud Secrets.")
             else:
                 st.warning("Please supply a syllabus outline.")
 
-        st.session_state.draft_text = st.text_area(
+        st.text_area(
             "Manuscript Editor (Markdown Supported)", 
-            value=st.session_state.draft_text, 
-            height=320, 
-            key="m_editor"
+            key="maker_draft_input", 
+            height=320
         )
+        st.session_state.draft_text = st.session_state.get("maker_draft_input", "")
 
     with tab_format:
         if feat_flags.get("branding_mapper_enabled", True):
@@ -773,15 +782,25 @@ else:
             adm_ref_txt = st.text_area("Or Paste Reference Excerpts", height=90, key="adm_maker_ref_txt")
             adm_ref = extract_content_multi_format(adm_ref_file) if adm_ref_file else adm_ref_txt
 
+        if "admin_maker_draft_input" not in st.session_state:
+            st.session_state["admin_maker_draft_input"] = st.session_state.get("draft_text", "")
+
         if st.button("🤖 Generate Draft Manuscript", type="primary", key="adm_maker_btn"):
             if adm_syl.strip():
                 with st.spinner("Generating draft manuscript..."):
-                    st.session_state.draft_text = run_stage_1_maker(adm_syl, adm_ref, "Postgraduate", selected_deliverable)
-                    st.success("Draft Generated! Review below.")
+                    gen_adm = run_stage_1_maker(adm_syl, adm_ref, "Postgraduate", selected_deliverable)
+                    if gen_adm and str(gen_adm).strip():
+                        st.session_state["admin_maker_draft_input"] = str(gen_adm)
+                        st.session_state.draft_text = str(gen_adm)
+                        st.success("Draft Generated! Review below.")
+                        st.rerun()
+                    else:
+                        st.error("AI Maker returned empty content. Please verify that GEMINI_API_KEY is active in Streamlit Cloud Secrets.")
             else:
                 st.warning("Please supply a syllabus outline.")
 
-        st.session_state.draft_text = st.text_area("Manuscript Text / Editor", value=st.session_state.draft_text, height=220, key="adm_maker_editor")
+        st.text_area("Manuscript Text / Editor", key="admin_maker_draft_input", height=240)
+        st.session_state.draft_text = st.session_state.get("admin_maker_draft_input", "")
 
         col_sub1, col_sub2 = st.columns(2)
         with col_sub1:
