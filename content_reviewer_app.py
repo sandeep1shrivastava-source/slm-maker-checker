@@ -144,6 +144,14 @@ def save_university_to_config(uni_name: str):
         return cfg
     update_system_config(fn)
 
+def save_program_to_config(prog_name: str):
+    def fn(cfg):
+        progs = cfg.setdefault("programs", DEFAULT_PROGRAMS.copy())
+        if prog_name.strip() not in progs:
+            progs.append(prog_name.strip())
+        return cfg
+    update_system_config(fn)
+
 def save_feature_flags(flags: dict):
     def fn(cfg):
         feat = cfg.setdefault("features", {})
@@ -711,6 +719,14 @@ if is_lead_admin:
                 save_university_to_config(new_uni.strip())
                 st.success(f"Added: {new_uni.strip()}")
                 st.rerun()
+st.divider()
+st.markdown("##### 🎓 Register Academic Programme")
+new_prog = st.text_input("New Academic Programme Name", key="adm_prog")
+if st.button("➕ Add Programme", use_container_width=True):
+    if new_prog.strip():
+        save_program_to_config(new_prog.strip())
+        st.success(f"Added Programme: {new_prog.strip()}")
+        st.rerun()
 
 # Audit Scope Mapping
 st.sidebar.divider()
@@ -729,7 +745,22 @@ if sel_uni == "➕ Register New University...":
 else:
     selected_university = sel_uni
 
-selected_program = st.sidebar.selectbox("2. Academic Programme", DEFAULT_PROGRAMS, index=0)
+# Dynamic Programme Selector
+known_progs = DEFAULT_PROGRAMS
+if isinstance(sys_cfg, dict) and "programs" in sys_cfg and sys_cfg["programs"]:
+    known_progs = sys_cfg["programs"]
+
+prog_opts = known_progs + ["➕ Register New Programme..."]
+sel_prog = st.sidebar.selectbox("2. Academic Programme", prog_opts, index=0)
+if sel_prog == "➕ Register New Programme...":
+    custom_p = st.sidebar.text_input("New Programme Name").strip()
+    if st.sidebar.button("Save Programme"):
+        if custom_p:
+            save_program_to_config(custom_p)
+            st.rerun()
+    selected_program = custom_p or "Custom Programme"
+else:
+    selected_program = sel_prog
 selected_batch = st.sidebar.text_input("3. Batch / Cohort", value=st.session_state.active_batch)
 selected_term = st.sidebar.selectbox("4. Academic Term", ["Semester 1", "Semester 2", "Semester 3", "Semester 4"], index=0)
 selected_deliverable = st.sidebar.selectbox("5. Deliverable Under Review", ["SLM", "MCQ", "Question Bank", "PPT"], index=0)
