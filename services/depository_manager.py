@@ -16,7 +16,7 @@ def get_db():
     try:
         key_dict = dict(st.secrets["gcp_service_account"])
         creds = service_account.Credentials.from_service_account_info(key_dict)
-        db = firestore.Client(credentials=creds, project=key_dict.get("project_id"))
+        db = firestore.Client(credentials=creds, project=key_dict.get("project_id"), database="makerdatabase")
         return db
     except Exception as e:
         st.error(f"Failed to connect to Google Firestore: {e}")
