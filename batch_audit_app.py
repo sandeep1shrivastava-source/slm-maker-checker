@@ -7,7 +7,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 
-# Reuse your existing Stage 2 AI Audit & Docx generation engines
+# Reuse existing Stage 2 AI Audit & Database services
 from services.unified_engine import run_stage_2_checker
 from services.depository_manager import get_db
 
@@ -28,36 +28,6 @@ if "OPENAI_API_KEY" in st.secrets:
 
 st.title("📂 Academic Batch Drive Auditor & Pipeline Extension")
 st.caption("Automated ingestion, multi-sheet evaluation (SLM, MCQ, QB, PPT), and dynamic folder hierarchy creation.")
-
-def detect_deliverable_type(topic_name: str, doc_text: str, explicit_type: str = "") -> str:
-    """Dynamically identifies SLM, MCQ, QB, or PPT via metadata and structural text fingerprinting."""
-    if explicit_type and str(explicit_type).strip().upper() in ["SLM", "MCQ", "QB", "PPT"]:
-        return str(explicit_type).strip().upper()
-
-    metadata = str(topic_name).lower()
-    
-    # 1. Check title keywords
-    if any(k in metadata for k in ["mcq", "quiz", "objective"]): return "MCQ"
-    if any(k in metadata for k in ["question bank", "qb", "q&a"]): return "QB"
-    if any(k in metadata for k in ["ppt", "deck", "presentation"]): return "PPT"
-    if any(k in metadata for k in ["slm", "unit", "module"]): return "SLM"
-
-    # 2. Inspect document text structure (first 5000 chars)
-    text_snippet = doc_text[:5000]
-    
-    # MCQ fingerprint: Matches (A), (B) or Option A, and Answer keys
-    if len(re.findall(r"(\([A-Da-d]\)|\bOption\s+[A-D]\b)", text_snippet)) >= 8:
-        return "MCQ"
-    
-    # QB fingerprint: Matches mark allocations like [5 Marks], (10 marks)
-    if len(re.findall(r"(\[\d+\s*Marks?\]|\(\d+\s*Marks?\)|\b\d+\s*Marks\b)", text_snippet, re.IGNORECASE)) >= 3:
-        return "QB"
-        
-    # PPT fingerprint: Slide markers
-    if len(re.findall(r"(Slide\s+\d+|Presentation:)", text_snippet, re.IGNORECASE)) >= 3:
-        return "PPT"
-
-    return "SLM" # Default fallback
 
 # -----------------------------------------------------------------------------
 # 2. GOOGLE DRIVE ENGINE
@@ -87,7 +57,6 @@ def extract_drive_id(link_or_id: str) -> str:
 
 def download_drive_stream(service, file_id: str) -> io.BytesIO:
     """Downloads a file stream safely into memory, auto-handling native Google Sheets and Docs."""
-    # 1. Inspect file metadata
     meta = service.files().get(
         fileId=file_id, 
         fields="mimeType, name", 
@@ -95,7 +64,7 @@ def download_drive_stream(service, file_id: str) -> io.BytesIO:
     ).execute()
     mime_type = meta.get("mimeType", "")
 
-    # 2. Native Google Sheet -> Export directly as Excel (.xlsx) stream
+    # Native Google Sheet -> Export directly as Excel (.xlsx) stream
     if mime_type == "application/vnd.google-apps.spreadsheet":
         exported_bytes = service.files().export_media(
             fileId=file_id,
@@ -105,7 +74,7 @@ def download_drive_stream(service, file_id: str) -> io.BytesIO:
         stream.seek(0)
         return stream
 
-    # 3. Native Google Doc -> Export directly as Word (.docx) stream
+    # Native Google Doc -> Export directly as Word (.docx) stream
     elif mime_type == "application/vnd.google-apps.document":
         exported_bytes = service.files().export_media(
             fileId=file_id,
@@ -115,7 +84,7 @@ def download_drive_stream(service, file_id: str) -> io.BytesIO:
         stream.seek(0)
         return stream
 
-    # 4. Standard binary file (pre-uploaded .xlsx, .docx, .pdf)
+    # Standard binary file (.xlsx, .docx, .pdf uploaded directly to Drive)
     else:
         try:
             raw_bytes = service.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
@@ -150,12 +119,8 @@ def get_or_create_subfolder(service, parent_id: str, folder_name: str) -> str:
 def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: str, university: str, program: str, deliverable: str) -> str:
     """Creates Root -> University -> Program -> [Deliverable] Reports hierarchy and uploads report."""
     uni_folder_id = get_or_create_subfolder(service, root_id, university.strip())
-    
-    # Add Programme Level dynamically
     prog_name = program.strip() if program.strip() else "General Programme"
     prog_folder_id = get_or_create_subfolder(service, uni_folder_id, prog_name)
-    
-    # Add Deliverable Level dynamically
     subfolder_name = f"{deliverable.strip().upper()} Reports"
     target_folder_id = get_or_create_subfolder(service, prog_folder_id, subfolder_name)
 
@@ -232,6 +197,27 @@ def build_docx_dossier(qa_results: dict, university: str, deliverable: str, topi
     out.seek(0)
     return out
 
+def detect_deliverable_type(topic_name: str, doc_text: str, explicit_type: str = "") -> str:
+    """Dynamically identifies SLM, MCQ, QB, or PPT via metadata and structural text fingerprinting."""
+    if explicit_type and str(explicit_type).strip().upper() in ["SLM", "MCQ", "QB", "PPT"]:
+        return str(explicit_type).strip().upper()
+
+    metadata = str(topic_name).lower()
+    if any(k in metadata for k in ["mcq", "quiz", "objective"]): return "MCQ"
+    if any(k in metadata for k in ["question bank", "qb", "q&a"]): return "QB"
+    if any(k in metadata for k in ["ppt", "deck", "presentation"]): return "PPT"
+    if any(k in metadata for k in ["slm", "unit", "module"]): return "SLM"
+
+    text_snippet = doc_text[:5000]
+    if len(re.findall(r"(\([A-Da-d]\)|\bOption\s+[A-D]\b)", text_snippet)) >= 8:
+        return "MCQ"
+    if len(re.findall(r"(\[\d+\s*Marks?\]|\(\d+\s*Marks?\)|\b\d+\s*Marks\b)", text_snippet, re.IGNORECASE)) >= 3:
+        return "QB"
+    if len(re.findall(r"(Slide\s+\d+|Presentation:)", text_snippet, re.IGNORECASE)) >= 3:
+        return "PPT"
+
+    return "SLM"
+
 # -----------------------------------------------------------------------------
 # 4. USER INTERFACE & WORKFLOW
 # -----------------------------------------------------------------------------
@@ -251,7 +237,7 @@ audit_engine = st.sidebar.radio(
 st.markdown("### Step 1: Connect Master Excel Workbook")
 excel_link_input = st.text_input(
     "Paste Google Drive Link to Master Tracker Excel (.xlsx):",
-    placeholder="https://drive.google.com/file/d/1AbC.../view"
+    placeholder="https://docs.google.com/spreadsheets/d/1AbC.../edit"
 )
 clean_excel_id = extract_drive_id(excel_link_input)
 
@@ -281,7 +267,17 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
     with col_mode:
         default_deliv = st.selectbox("Default Deliverable (if unstated in row):", ["SLM", "MCQ", "QB", "PPT"])
 
-    # Read Headers
+    if st.button(f"🚀 Start Batch Audit for '{target_sheet}'", type="primary"):
+        if not clean_root_id:
+            st.error("Please enter the 'Root QA Reports Folder ID' in the sidebar first.")
+        else:
+            prog_bar = st.progress(0)
+            status_box = st.empty()
+            
+            active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
+            wb = openpyxl.load_workbook(active_stream)
+            ws = wb[target_sheet]
+            
             headers = {}
             for idx, cell in enumerate(ws[1], start=1):
                 if cell.value:
@@ -289,8 +285,6 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
             
             link_col = headers.get("source link") or headers.get("manuscript link") or headers.get("link")
             topic_col = headers.get("topic name") or headers.get("unit title") or headers.get("topic") or 1
-            
-            # Find explicit columns if they exist
             deliv_col = headers.get("deliverable type") or headers.get("type") or headers.get("deliverable")
             prog_col = headers.get("programme") or headers.get("program") or headers.get("course")
 
@@ -313,7 +307,6 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                     row_prog = str(ws.cell(row=r, column=prog_col).value or "General Programme").strip() if prog_col else "General Programme"
                     
                     try:
-                        # 1. Fetch File
                         doc_id = extract_drive_id(str(raw_link))
                         doc_stream = download_drive_stream(drive_service, doc_id)
                         doc_text = extract_text_from_stream(doc_stream)
@@ -322,16 +315,12 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                             ws.cell(row=r, column=out_col, value="Skipped: Empty Document")
                             continue
                         
-                        # 2. Dynamically Identify Deliverable Type (SLM, MCQ, QB, PPT)
                         detected_deliv = detect_deliverable_type(row_topic, doc_text, explicit_deliv)
-                        
                         status_box.info(f"⏳ Auditing [{r-1}/{total_rows}]: {row_prog} - **{row_topic}** (Detected as: {detected_deliv})...")
                         
-                        # 3. Run Audit
                         qa_result = run_stage_2_checker(doc_text, chk_syllabus="", engine=audit_engine)
                         dossier_stream = build_docx_dossier(qa_result, target_sheet, detected_deliv, row_topic)
                         
-                        # 4. Upload to dynamic nested folder: Root -> University -> Programme -> Deliverable
                         report_name = f"{row_prog}_{row_topic}_{detected_deliv}_QA_Report.docx"
                         report_url = upload_report_to_hierarchy(
                             drive_service,
@@ -343,18 +332,13 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                             detected_deliv
                         )
                         
-                        # 5. Write Link back to Sheet Cell
                         ws.cell(row=r, column=out_col, value=report_url)
                         success_count += 1
-                        
                     except Exception as err:
                         ws.cell(row=r, column=out_col, value=f"Error: {str(err)[:60]}")
                     
                     prog_bar.progress(min((r - 1) / max(total_rows, 1), 1.0))
-                    
-                    prog_bar.progress(min((r - 1) / max(total_rows, 1), 1.0))
 
-                # Save updated workbook
                 out_excel = io.BytesIO()
                 wb.save(out_excel)
                 out_excel.seek(0)
