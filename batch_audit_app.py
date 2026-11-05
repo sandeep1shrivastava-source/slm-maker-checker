@@ -58,7 +58,7 @@ def extract_drive_id(link_or_id: str) -> str:
 def download_drive_stream(service, file_id: str) -> io.BytesIO:
     """Downloads a file stream safely into memory, auto-handling native Google Sheets."""
     # 1. Inspect file metadata to determine MIME type
-    meta = service.files().get(fileId=file_id, fields="mimeType, name").execute()
+    meta = service.files().get(fileId=file_id, fields="mimeType, name", supportsAllDrives=True).execute()
     mime_type = meta.get("mimeType", "")
 
     # 2. If it's a native Google Sheet, export it as an Excel (.xlsx) stream
