@@ -283,14 +283,12 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
     
     target_sheet = st.selectbox("Select Sheet to Audit:", st.session_state["sheet_names"])
     
-    # Load sheet into pandas without header to inspect raw rows
     active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
     df_raw = pd.read_excel(active_stream, sheet_name=target_sheet, header=None)
     
     st.markdown("#### 📋 Sheet Preview (First 8 Rows)")
     st.dataframe(df_raw.head(8), use_container_width=True)
     
-    # Let user pick which row actually has the column names
     col_h1, col_h2 = st.columns([1, 2])
     with col_h1:
         header_row_num = st.number_input(
@@ -302,11 +300,9 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
             help="Look at the preview table above and pick the row that contains your actual column names."
         )
     
-    # Extract headers from the chosen row
     header_row_idx = int(header_row_num)
     raw_header_values = df_raw.iloc[header_row_idx - 1].tolist()
     
-    # Build dictionary of {Column_Name: 1-based column index}
     col_mapping = {}
     for col_idx, val in enumerate(raw_header_values, start=1):
         if pd.notna(val) and str(val).strip():
@@ -319,7 +315,6 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
             
     header_options = list(col_mapping.keys())
     
-    # Auto-detect default selections
     def_link_col = next((c for c in header_options if any(k in c.lower() for k in ["link", "url", "drive"])), header_options[0])
     def_uni_col = next((c for c in header_options if any(k in c.lower() for k in ["university", "univ", "college"])), None)
     def_prog_col = next((c for c in header_options if any(k in c.lower() for k in ["programme", "program", "course", "degree"])), None)
@@ -350,7 +345,12 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
         deliv_idx = deliv_opts.index(def_deliv_col) if def_deliv_col in deliv_opts else 0
         sel_deliv_col = st.selectbox("📑 Deliverable Type Column:", deliv_opts, index=deliv_idx)
 
-    if st.button(f"🚀 Start Batch Audit for '{target_sheet}'", type="primary"):
+    if "audit_results_cache" not in st.session_state:
+        st.session_state["audit_results_cache"] = []
+    if "updated_excel_cache" not in st.session_state:
+        st.session_state["updated_excel_cache"] = None
+
+    if st.button(f"🚀 Generate Reports for '{target_sheet}' (Do NOT update Excel yet)", type="primary"):
         if not clean_root_id:
             st.error("Please enter the 'Root QA Reports Folder ID' in the sidebar first.")
         elif not sel_link_col:
@@ -358,12 +358,12 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
         else:
             prog_bar = st.progress(0)
             status_box = st.empty()
+            st.session_state["audit_results_cache"] = []
             
             active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
             wb = openpyxl.load_workbook(active_stream)
             ws = wb[target_sheet]
             
-            # Map column indices based on user selection
             link_col_idx = col_mapping.get(sel_link_col)
             uni_col_idx = col_mapping.get(sel_uni_col) if sel_uni_col != "[Use Sheet Name as University]" else None
             prog_col_idx = col_mapping.get(sel_prog_col) if sel_prog_col != "[Default: General Programme]" else None
@@ -421,6 +421,17 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                     )
                     
                     ws.cell(row=r, column=report_col_idx, value=report_url)
+                    
+                    # Store result for on-screen review
+                    score_val = qa_result.get("overall_score", qa_result.get("quality_score", "N/A"))
+                    st.session_state["audit_results_cache"].append({
+                        "University": row_uni,
+                        "Programme": row_prog,
+                        "Topic": row_topic,
+                        "Deliverable": detected_deliv,
+                        "Score": f"{score_val}/100",
+                        "Link": report_url
+                    })
                     success_count += 1
                 except Exception as err:
                     ws.cell(row=r, column=report_col_idx, value=f"Error: {str(err)[:60]}")
@@ -430,14 +441,35 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
             out_excel = io.BytesIO()
             wb.save(out_excel)
             out_excel.seek(0)
-            st.session_state["raw_excel_bytes"] = out_excel.getvalue()
+            st.session_state["updated_excel_cache"] = out_excel.getvalue()
 
             status_box.empty()
-            st.success(f"Audit completed for '{target_sheet}'. Processed {success_count} item(s) and populated Drive links.")
-            
+            st.success(f"✅ Generated {success_count} report(s). Please review them below.")
+
+    # -----------------------------------------------------------------------------
+    # STEP 3: REVIEW & COMMIT
+    # -----------------------------------------------------------------------------
+    if st.session_state.get("audit_results_cache"):
+        st.divider()
+        st.markdown("### Step 3: Review Generated Reports")
+        
+        df_review = pd.DataFrame(st.session_state["audit_results_cache"])
+        st.dataframe(
+            df_review,
+            column_config={
+                "Link": st.column_config.LinkColumn("Google Drive Link")
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        st.markdown("---")
+        st.markdown("#### ✅ Satisfied with the reports?")
+        
+        if st.button("Copy Links to Excel (Download Updated Workbook)"):
             st.download_button(
-                label=f"📥 Download Updated Workbook ({target_sheet})",
-                data=out_excel,
+                label=f"📥 Download Updated '{target_sheet}' Workbook with Links",
+                data=st.session_state["updated_excel_cache"],
                 file_name=f"Updated_Master_QA_{target_sheet}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary"
