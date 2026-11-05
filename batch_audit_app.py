@@ -29,6 +29,36 @@ if "OPENAI_API_KEY" in st.secrets:
 st.title("📂 Academic Batch Drive Auditor & Pipeline Extension")
 st.caption("Automated ingestion, multi-sheet evaluation (SLM, MCQ, QB, PPT), and dynamic folder hierarchy creation.")
 
+def detect_deliverable_type(topic_name: str, doc_text: str, explicit_type: str = "") -> str:
+    """Dynamically identifies SLM, MCQ, QB, or PPT via metadata and structural text fingerprinting."""
+    if explicit_type and str(explicit_type).strip().upper() in ["SLM", "MCQ", "QB", "PPT"]:
+        return str(explicit_type).strip().upper()
+
+    metadata = str(topic_name).lower()
+    
+    # 1. Check title keywords
+    if any(k in metadata for k in ["mcq", "quiz", "objective"]): return "MCQ"
+    if any(k in metadata for k in ["question bank", "qb", "q&a"]): return "QB"
+    if any(k in metadata for k in ["ppt", "deck", "presentation"]): return "PPT"
+    if any(k in metadata for k in ["slm", "unit", "module"]): return "SLM"
+
+    # 2. Inspect document text structure (first 5000 chars)
+    text_snippet = doc_text[:5000]
+    
+    # MCQ fingerprint: Matches (A), (B) or Option A, and Answer keys
+    if len(re.findall(r"(\([A-Da-d]\)|\bOption\s+[A-D]\b)", text_snippet)) >= 8:
+        return "MCQ"
+    
+    # QB fingerprint: Matches mark allocations like [5 Marks], (10 marks)
+    if len(re.findall(r"(\[\d+\s*Marks?\]|\(\d+\s*Marks?\)|\b\d+\s*Marks\b)", text_snippet, re.IGNORECASE)) >= 3:
+        return "QB"
+        
+    # PPT fingerprint: Slide markers
+    if len(re.findall(r"(Slide\s+\d+|Presentation:)", text_snippet, re.IGNORECASE)) >= 3:
+        return "PPT"
+
+    return "SLM" # Default fallback
+
 # -----------------------------------------------------------------------------
 # 2. GOOGLE DRIVE ENGINE
 # -----------------------------------------------------------------------------
@@ -117,11 +147,17 @@ def get_or_create_subfolder(service, parent_id: str, folder_name: str) -> str:
     created = service.files().create(body=meta, fields="id").execute()
     return created.get("id")
 
-def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: str, university: str, deliverable: str) -> str:
-    """Creates Root -> University -> [Deliverable] Reports hierarchy and uploads report."""
+def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: str, university: str, program: str, deliverable: str) -> str:
+    """Creates Root -> University -> Program -> [Deliverable] Reports hierarchy and uploads report."""
     uni_folder_id = get_or_create_subfolder(service, root_id, university.strip())
+    
+    # Add Programme Level dynamically
+    prog_name = program.strip() if program.strip() else "General Programme"
+    prog_folder_id = get_or_create_subfolder(service, uni_folder_id, prog_name)
+    
+    # Add Deliverable Level dynamically
     subfolder_name = f"{deliverable.strip().upper()} Reports"
-    target_folder_id = get_or_create_subfolder(service, uni_folder_id, subfolder_name)
+    target_folder_id = get_or_create_subfolder(service, prog_folder_id, subfolder_name)
 
     media = MediaIoBaseUpload(
         docx_stream,
@@ -245,42 +281,24 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
     with col_mode:
         default_deliv = st.selectbox("Default Deliverable (if unstated in row):", ["SLM", "MCQ", "QB", "PPT"])
 
-    if st.button(f"🚀 Start Batch Audit for '{target_sheet}'", type="primary"):
-        if not clean_root_id:
-            st.error("Please enter the 'Root QA Reports Folder ID' in the sidebar first.")
-        else:
-            prog_bar = st.progress(0)
-            status_box = st.empty()
-            
-            # Load workbook
-            active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
-            wb = openpyxl.load_workbook(active_stream)
-            ws = wb[target_sheet]
-            
-            # Read Headers
+    # Read Headers
             headers = {}
             for idx, cell in enumerate(ws[1], start=1):
                 if cell.value:
                     headers[str(cell.value).strip().lower()] = idx
             
-            link_col = (
-                headers.get("source link") or 
-                headers.get("manuscript link") or 
-                headers.get("drive link") or 
-                headers.get("link")
-            )
+            link_col = headers.get("source link") or headers.get("manuscript link") or headers.get("link")
             topic_col = headers.get("topic name") or headers.get("unit title") or headers.get("topic") or 1
+            
+            # Find explicit columns if they exist
             deliv_col = headers.get("deliverable type") or headers.get("type") or headers.get("deliverable")
+            prog_col = headers.get("programme") or headers.get("program") or headers.get("course")
 
             if not link_col:
-                st.error(f"Sheet '{target_sheet}' must contain a column named 'Source Link' or 'Manuscript Link'.")
+                st.error(f"Sheet '{target_sheet}' must contain a 'Source Link' column.")
             else:
-                # Add or identify "QA Report Link" column
-                if "qa report link" in headers:
-                    out_col = headers["qa report link"]
-                else:
-                    out_col = len(headers) + 1
-                    ws.cell(row=1, column=out_col, value="QA Report Link")
+                out_col = headers.get("qa report link", len(headers) + 1)
+                ws.cell(row=1, column=out_col, value="QA Report Link")
 
                 total_rows = ws.max_row - 1
                 success_count = 0
@@ -291,42 +309,48 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                         continue
                     
                     row_topic = str(ws.cell(row=r, column=topic_col).value or f"Module_{r}").strip()
-                    row_deliv = str(ws.cell(row=r, column=deliv_col).value if deliv_col else default_deliv).strip().upper()
-                    
-                    status_box.info(f"⏳ Processing [{r-1}/{total_rows}]: **{row_topic}** ({row_deliv})...")
+                    explicit_deliv = str(ws.cell(row=r, column=deliv_col).value or "").strip() if deliv_col else ""
+                    row_prog = str(ws.cell(row=r, column=prog_col).value or "General Programme").strip() if prog_col else "General Programme"
                     
                     try:
-                        # 1. Fetch file from Drive (Read-Only)
+                        # 1. Fetch File
                         doc_id = extract_drive_id(str(raw_link))
                         doc_stream = download_drive_stream(drive_service, doc_id)
                         doc_text = extract_text_from_stream(doc_stream)
                         
                         if len(doc_text.strip()) < 50:
-                            ws.cell(row=r, column=out_col, value="Skipped: Empty or unreadable document")
+                            ws.cell(row=r, column=out_col, value="Skipped: Empty Document")
                             continue
                         
-                        # 2. Run Audit
+                        # 2. Dynamically Identify Deliverable Type (SLM, MCQ, QB, PPT)
+                        detected_deliv = detect_deliverable_type(row_topic, doc_text, explicit_deliv)
+                        
+                        status_box.info(f"⏳ Auditing [{r-1}/{total_rows}]: {row_prog} - **{row_topic}** (Detected as: {detected_deliv})...")
+                        
+                        # 3. Run Audit
                         qa_result = run_stage_2_checker(doc_text, chk_syllabus="", engine=audit_engine)
+                        dossier_stream = build_docx_dossier(qa_result, target_sheet, detected_deliv, row_topic)
                         
-                        # 3. Build Word Dossier
-                        dossier_stream = build_docx_dossier(qa_result, target_sheet, row_deliv, row_topic)
-                        
-                        # 4. Upload to Root -> University -> Deliverable Reports Folder
-                        report_name = f"{row_topic}_{row_deliv}_QA_Report.docx"
+                        # 4. Upload to dynamic nested folder: Root -> University -> Programme -> Deliverable
+                        report_name = f"{row_prog}_{row_topic}_{detected_deliv}_QA_Report.docx"
                         report_url = upload_report_to_hierarchy(
                             drive_service,
                             dossier_stream,
                             report_name,
                             clean_root_id,
                             target_sheet,
-                            row_deliv
+                            row_prog,
+                            detected_deliv
                         )
                         
                         # 5. Write Link back to Sheet Cell
                         ws.cell(row=r, column=out_col, value=report_url)
                         success_count += 1
+                        
                     except Exception as err:
-                        ws.cell(row=r, column=out_col, value=f"Audit Error: {str(err)[:60]}")
+                        ws.cell(row=r, column=out_col, value=f"Error: {str(err)[:60]}")
+                    
+                    prog_bar.progress(min((r - 1) / max(total_rows, 1), 1.0))
                     
                     prog_bar.progress(min((r - 1) / max(total_rows, 1), 1.0))
 
