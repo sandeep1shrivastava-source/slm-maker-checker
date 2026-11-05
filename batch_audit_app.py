@@ -56,34 +56,49 @@ def extract_drive_id(link_or_id: str) -> str:
     return str(link_or_id).strip()
 
 def download_drive_stream(service, file_id: str) -> io.BytesIO:
-    """Downloads a file stream safely into memory, auto-handling native Google Sheets."""
-    # 1. Inspect file metadata to determine MIME type
-    meta = service.files().get(fileId=file_id, fields="mimeType, name", supportsAllDrives=True).execute()
+    """Downloads a file stream safely into memory, auto-handling native Google Sheets and Docs."""
+    # 1. Inspect file metadata
+    meta = service.files().get(
+        fileId=file_id, 
+        fields="mimeType, name", 
+        supportsAllDrives=True
+    ).execute()
     mime_type = meta.get("mimeType", "")
 
-    # 2. If it's a native Google Sheet, export it as an Excel (.xlsx) stream
+    # 2. Native Google Sheet -> Export directly as Excel (.xlsx) stream
     if mime_type == "application/vnd.google-apps.spreadsheet":
-        request = service.files().export_media(
+        exported_bytes = service.files().export_media(
             fileId=file_id,
             mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    # 3. If it's a native Google Doc, export it as a Word (.docx) stream
+        ).execute()
+        stream = io.BytesIO(exported_bytes)
+        stream.seek(0)
+        return stream
+
+    # 3. Native Google Doc -> Export directly as Word (.docx) stream
     elif mime_type == "application/vnd.google-apps.document":
-        request = service.files().export_media(
+        exported_bytes = service.files().export_media(
             fileId=file_id,
             mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
-    # 4. Standard binary file (.xlsx, .docx, .pdf uploaded directly to Drive)
-    else:
-        request = service.files().get_media(fileId=file_id)
+        ).execute()
+        stream = io.BytesIO(exported_bytes)
+        stream.seek(0)
+        return stream
 
-    stream = io.BytesIO()
-    downloader = MediaIoBaseDownload(stream, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    stream.seek(0)
-    return stream
+    # 4. Standard binary file (pre-uploaded .xlsx, .docx, .pdf)
+    else:
+        try:
+            raw_bytes = service.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
+            stream = io.BytesIO(raw_bytes)
+        except Exception:
+            request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+            stream = io.BytesIO()
+            downloader = MediaIoBaseDownload(stream, request)
+            done = False
+            while not done:
+                _, done = downloader.next_chunk()
+        stream.seek(0)
+        return stream
 
 def get_or_create_subfolder(service, parent_id: str, folder_name: str) -> str:
     """Finds or creates a folder under parent_id without creating duplicates."""
