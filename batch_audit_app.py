@@ -321,13 +321,24 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
     
     target_sheet = st.selectbox("Select Sheet to Audit:", st.session_state["sheet_names"])
     
-    # Read active sheet to analyze columns
+   import pandas as pd
+
+    # Load raw preview of the sheet
     active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
-    wb_temp = openpyxl.load_workbook(active_stream, data_only=True)
-    ws_temp = wb_temp[target_sheet]
-    
-    header_row_idx, headers_map, def_link, def_uni, def_prog, def_topic, def_deliv = analyze_sheet_structure(ws_temp)
-    available_cols = list(headers_map.keys())
+    df_preview = pd.read_excel(active_stream, sheet_name=target_sheet, header=None)
+
+    st.markdown("#### 📋 Sheet Data Preview (First 8 Rows)")
+    st.dataframe(df_preview.head(8), use_container_width=True)
+
+    col_h1, col_h2 = st.columns([1, 2])
+    with col_h1:
+        header_row_choice = st.number_input(
+            "Select which row contains your actual Column Headers (1-indexed):",
+            min_value=1,
+            max_value=min(10, len(df_preview)),
+            value=2 if len(df_preview) > 1 else 1,
+            step=1
+        )
     
     st.info(f"Detected Headers on Row {header_row_idx}: {', '.join(available_cols) if available_cols else 'None'}")
     
