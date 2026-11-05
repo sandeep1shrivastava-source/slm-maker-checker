@@ -3,6 +3,7 @@ import io
 import re
 import os
 import openpyxl
+import pandas as pd
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
@@ -30,7 +31,7 @@ st.title("📂 Academic Batch Drive Auditor & Pipeline Extension")
 st.caption("Automated ingestion, multi-sheet evaluation (SLM, MCQ, QB, PPT), and dynamic folder hierarchy creation.")
 
 # -----------------------------------------------------------------------------
-# 2. GOOGLE DRIVE ENGINE
+# 2. GOOGLE DRIVE ENGINE (READ-ONLY FOR SOURCE ASSETS)
 # -----------------------------------------------------------------------------
 @st.cache_resource
 def get_drive_service():
@@ -56,7 +57,7 @@ def extract_drive_id(link_or_id: str) -> str:
     return str(link_or_id).strip()
 
 def download_drive_stream(service, file_id: str) -> io.BytesIO:
-    """Downloads a file stream safely into memory, auto-handling native Google Sheets and Docs."""
+    """Downloads a file stream safely into memory (Read-Only)."""
     meta = service.files().get(
         fileId=file_id, 
         fields="mimeType, name", 
@@ -98,19 +99,31 @@ def download_drive_stream(service, file_id: str) -> io.BytesIO:
 
 def get_or_create_subfolder(service, parent_id: str, folder_name: str) -> str:
     """Finds or creates a folder under parent_id without creating duplicates."""
-    safe_name = folder_name.replace("'", "\\'")
-    query = f"'{parent_id}' in parents and name = '{safe_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    res = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+    clean_name = folder_name.strip() if folder_name and folder_name.strip() else "Untitled"
+    safe_name = clean_name.replace("'", "\\'")
+    query = (
+        f"'{parent_id}' in parents and "
+        f"name = '{safe_name}' and "
+        f"mimeType = 'application/vnd.google-apps.folder' and "
+        f"trashed = false"
+    )
+    res = service.files().list(
+        q=query, 
+        spaces="drive", 
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True
+    ).execute()
     files = res.get("files", [])
     if files:
         return files[0]["id"]
     
     meta = {
-        "name": folder_name,
+        "name": clean_name,
         "mimeType": "application/vnd.google-apps.folder",
         "parents": [parent_id]
     }
-    created = service.files().create(body=meta, fields="id").execute()
+    created = service.files().create(body=meta, fields="id", supportsAllDrives=True).execute()
     return created.get("id")
 
 def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: str, university: str, program: str, deliverable: str) -> str:
@@ -133,7 +146,8 @@ def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: st
     uploaded = service.files().create(
         body={"name": file_name, "parents": [target_folder_id]},
         media_body=media,
-        fields="id, webViewLink"
+        fields="id, webViewLink",
+        supportsAllDrives=True
     ).execute()
     return uploaded.get("webViewLink", "")
 
@@ -141,7 +155,7 @@ def upload_report_to_hierarchy(service, docx_stream, file_name: str, root_id: st
 # 3. TEXT EXTRACTOR & REPORT COMPILER
 # -----------------------------------------------------------------------------
 def extract_text_from_stream(stream: io.BytesIO) -> str:
-    """Extracts text content from .docx or .pdf streams."""
+    """Extracts text content safely from .docx or .pdf streams."""
     try:
         import docx
         doc = docx.Document(stream)
@@ -158,11 +172,12 @@ def extract_text_from_stream(stream: io.BytesIO) -> str:
 def build_docx_dossier(qa_results: dict, university: str, deliverable: str, topic: str) -> io.BytesIO:
     """Builds a formatted Word QA dossier in memory."""
     import docx
-    from docx.shared import Inches, Pt, RGBColor
+    from docx.shared import Pt, RGBColor
     
     doc = docx.Document()
     title = doc.add_heading("ACADEMIC QUALITY AUDIT REPORT", level=0)
-    title.runs[0].font.color.rgb = RGBColor(192, 0, 0)
+    if title.runs:
+        title.runs[0].font.color.rgb = RGBColor(192, 0, 0)
     
     doc.add_paragraph(f"Institution: {university} | Deliverable: {deliverable} | Unit/Topic: {topic}")
     doc.add_paragraph("=" * 60)
@@ -204,15 +219,19 @@ def detect_deliverable_type(topic_name: str, doc_text: str, explicit_type: str =
         return str(explicit_type).strip().upper()
 
     metadata = str(topic_name).lower()
-    if any(k in metadata for k in ["mcq", "quiz", "objective"]): return "MCQ"
-    if any(k in metadata for k in ["question bank", "qb", "q&a"]): return "QB"
-    if any(k in metadata for k in ["ppt", "deck", "presentation"]): return "PPT"
-    if any(k in metadata for k in ["slm", "unit", "module"]): return "SLM"
+    if any(k in metadata for k in ["mcq", "quiz", "objective"]): 
+        return "MCQ"
+    if any(k in metadata for k in ["question bank", "qb", "q&a"]): 
+        return "QB"
+    if any(k in metadata for k in ["ppt", "deck", "presentation"]): 
+        return "PPT"
+    if any(k in metadata for k in ["slm", "unit", "module", "chapter"]): 
+        return "SLM"
 
     text_snippet = doc_text[:5000]
-    if len(re.findall(r"(\([A-Da-d]\)|\bOption\s+[A-D]\b)", text_snippet)) >= 8:
+    if len(re.findall(r"(\([A-Da-d]\)| Option\s+[A-D] )", text_snippet)) >= 8:
         return "MCQ"
-    if len(re.findall(r"(\[\d+\s*Marks?\]|\(\d+\s*Marks?\)|\b\d+\s*Marks\b)", text_snippet, re.IGNORECASE)) >= 3:
+    if len(re.findall(r"(\[\d+\s*Marks?\]|\(\d+\s*Marks?\)| \d+\s*Marks )", text_snippet, re.IGNORECASE)) >= 3:
         return "QB"
     if len(re.findall(r"(Slide\s+\d+|Presentation:)", text_snippet, re.IGNORECASE)) >= 3:
         return "PPT"
@@ -220,64 +239,7 @@ def detect_deliverable_type(topic_name: str, doc_text: str, explicit_type: str =
     return "SLM"
 
 # -----------------------------------------------------------------------------
-# 4. SMART SHEET INSPECTOR & COLUMN RESOLVER
-# -----------------------------------------------------------------------------
-def analyze_sheet_structure(ws):
-    """Inspects sheet rows to automatically detect header row and column mappings."""
-    header_row_idx = 1
-    headers = {}
-    
-    # Check rows 1 to 5 for the most likely header row
-    for r in range(1, min(6, ws.max_row + 1)):
-        row_vals = [cell.value for cell in ws[r] if cell.value is not None]
-        str_count = sum(1 for v in row_vals if isinstance(v, str) and len(v.strip()) > 1)
-        if str_count >= 2:
-            header_row_idx = r
-            for col_idx, cell in enumerate(ws[r], start=1):
-                if cell.value is not None:
-                    headers[str(cell.value).strip()] = col_idx
-            break
-
-    if not headers:
-        header_row_idx = 1
-        for col_idx, cell in enumerate(ws[1], start=1):
-            if cell.value is not None:
-                headers[str(cell.value).strip()] = col_idx
-
-    detected_link = None
-    detected_uni = None
-    detected_prog = None
-    detected_topic = None
-    detected_deliv = None
-
-    for col_name, idx in headers.items():
-        low = col_name.lower().strip()
-        if not detected_link and any(k in low for k in ["link", "url", "drive link", "doc link", "file link", "drive"]):
-            detected_link = col_name
-        if not detected_uni and any(k in low for k in ["university", "univ", "institution", "college"]):
-            detected_uni = col_name
-        if not detected_prog and any(k in low for k in ["programme", "program", "course", "degree"]):
-            detected_prog = col_name
-        if not detected_topic and any(k in low for k in ["topic", "unit", "module", "chapter", "title", "subject"]):
-            detected_topic = col_name
-        if not detected_deliv and any(k in low for k in ["deliverable", "type", "format", "asset"]):
-            detected_deliv = col_name
-
-    # Content-based link scanning fallback
-    if not detected_link:
-        for col_name, col_idx in headers.items():
-            for r in range(header_row_idx + 1, min(header_row_idx + 10, ws.max_row + 1)):
-                val = str(ws.cell(row=r, column=col_idx).value or "")
-                if "drive.google.com" in val or "docs.google.com" in val or "http" in val:
-                    detected_link = col_name
-                    break
-            if detected_link:
-                break
-
-    return header_row_idx, headers, detected_link, detected_uni, detected_prog, detected_topic, detected_deliv
-
-# -----------------------------------------------------------------------------
-# 5. USER INTERFACE & WORKFLOW
+# 4. USER INTERFACE & WORKFLOW
 # -----------------------------------------------------------------------------
 st.sidebar.header("⚙️ Configuration")
 root_folder_input = st.sidebar.text_input(
@@ -311,59 +273,82 @@ if clean_excel_id and drive_service:
                 wb_preview.close()
                 xl_stream.seek(0)
                 st.session_state["raw_excel_bytes"] = xl_stream.getvalue()
-                st.success(f"Workbook inspected! Found {len(st.session_state['sheet_names'])} sheets: {', '.join(st.session_state['sheet_names'][:5])}...")
+                st.success(f"Workbook inspected! Found {len(st.session_state['sheet_names'])} sheets.")
             except Exception as e:
                 st.error(f"Failed to access workbook: {e}")
 
 if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
     st.divider()
-    st.markdown("### Step 2: Select Sheet & Verify Column Mapping")
+    st.markdown("### Step 2: Select Sheet & Inspect Layout")
     
     target_sheet = st.selectbox("Select Sheet to Audit:", st.session_state["sheet_names"])
     
-   import pandas as pd
-
-    # Load raw preview of the sheet
+    # Load sheet into pandas without header to inspect raw rows
     active_stream = io.BytesIO(st.session_state["raw_excel_bytes"])
-    df_preview = pd.read_excel(active_stream, sheet_name=target_sheet, header=None)
-
-    st.markdown("#### 📋 Sheet Data Preview (First 8 Rows)")
-    st.dataframe(df_preview.head(8), use_container_width=True)
-
+    df_raw = pd.read_excel(active_stream, sheet_name=target_sheet, header=None)
+    
+    st.markdown("#### 📋 Sheet Preview (First 8 Rows)")
+    st.dataframe(df_raw.head(8), use_container_width=True)
+    
+    # Let user pick which row actually has the column names
     col_h1, col_h2 = st.columns([1, 2])
     with col_h1:
-        header_row_choice = st.number_input(
-            "Select which row contains your actual Column Headers (1-indexed):",
+        header_row_num = st.number_input(
+            "Select Header Row Number (1-indexed):",
             min_value=1,
-            max_value=min(10, len(df_preview)),
-            value=2 if len(df_preview) > 1 else 1,
-            step=1
+            max_value=min(15, len(df_raw)),
+            value=2 if len(df_raw) > 1 else 1,
+            step=1,
+            help="Look at the preview table above and pick the row that contains your actual column names."
         )
     
-    st.info(f"Detected Headers on Row {header_row_idx}: {', '.join(available_cols) if available_cols else 'None'}")
+    # Extract headers from the chosen row
+    header_row_idx = int(header_row_num)
+    raw_header_values = df_raw.iloc[header_row_idx - 1].tolist()
     
+    # Build dictionary of {Column_Name: 1-based column index}
+    col_mapping = {}
+    for col_idx, val in enumerate(raw_header_values, start=1):
+        if pd.notna(val) and str(val).strip():
+            c_name = str(val).strip()
+            if c_name in col_mapping:
+                c_name = f"{c_name} (Col {col_idx})"
+            col_mapping[c_name] = col_idx
+        else:
+            col_mapping[f"Column {col_idx}"] = col_idx
+            
+    header_options = list(col_mapping.keys())
+    
+    # Auto-detect default selections
+    def_link_col = next((c for c in header_options if any(k in c.lower() for k in ["link", "url", "drive"])), header_options[0])
+    def_uni_col = next((c for c in header_options if any(k in c.lower() for k in ["university", "univ", "college"])), None)
+    def_prog_col = next((c for c in header_options if any(k in c.lower() for k in ["programme", "program", "course", "degree"])), None)
+    def_topic_col = next((c for c in header_options if any(k in c.lower() for k in ["topic", "unit", "module", "chapter", "title", "subject"])), None)
+    def_deliv_col = next((c for c in header_options if any(k in c.lower() for k in ["deliverable", "type", "format", "asset"])), None)
+
+    st.markdown("#### 🔗 Map Columns for Auditing")
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
-        link_idx = available_cols.index(def_link) if def_link in available_cols else 0
-        sel_link_col = st.selectbox("🔗 Document Link Column (Required):", available_cols, index=link_idx if available_cols else 0)
+        link_idx = header_options.index(def_link_col) if def_link_col in header_options else 0
+        sel_link_col = st.selectbox("🔗 Document Link Column (Required):", header_options, index=link_idx)
     with col_m2:
-        uni_options = ["[Use Sheet Name as University]"] + available_cols
-        uni_idx = uni_options.index(def_uni) if def_uni in uni_options else 0
-        sel_uni_col = st.selectbox("🏛️ University Column:", uni_options, index=uni_idx)
+        uni_opts = ["[Use Sheet Name as University]"] + header_options
+        uni_idx = uni_opts.index(def_uni_col) if def_uni_col in uni_opts else 0
+        sel_uni_col = st.selectbox("🏛️ University Column:", uni_opts, index=uni_idx)
     with col_m3:
-        prog_options = ["[Default: General Programme]"] + available_cols
-        prog_idx = prog_options.index(def_prog) if def_prog in prog_options else 0
-        sel_prog_col = st.selectbox("🎓 Programme Column:", prog_options, index=prog_idx)
+        prog_opts = ["[Default: General Programme]"] + header_options
+        prog_idx = prog_opts.index(def_prog_col) if def_prog_col in prog_opts else 0
+        sel_prog_col = st.selectbox("🎓 Programme Column:", prog_opts, index=prog_idx)
 
     col_m4, col_m5 = st.columns(2)
     with col_m4:
-        topic_options = ["[Auto: Row Number]"] + available_cols
-        topic_idx = topic_options.index(def_topic) if def_topic in topic_options else 0
-        sel_topic_col = st.selectbox("📖 Topic / Unit Column:", topic_options, index=topic_idx)
+        topic_opts = ["[Auto: Row Number]"] + header_options
+        topic_idx = topic_opts.index(def_topic_col) if def_topic_col in topic_opts else 0
+        sel_topic_col = st.selectbox("📖 Topic / Unit Column:", topic_opts, index=topic_idx)
     with col_m5:
-        deliv_options = ["[Auto-Detect via AI / Content]"] + available_cols
-        deliv_idx = deliv_options.index(def_deliv) if def_deliv in deliv_options else 0
-        sel_deliv_col = st.selectbox("📑 Deliverable Type Column:", deliv_options, index=deliv_idx)
+        deliv_opts = ["[Auto-Detect via AI / Content]"] + header_options
+        deliv_idx = deliv_opts.index(def_deliv_col) if def_deliv_col in deliv_opts else 0
+        sel_deliv_col = st.selectbox("📑 Deliverable Type Column:", deliv_opts, index=deliv_idx)
 
     if st.button(f"🚀 Start Batch Audit for '{target_sheet}'", type="primary"):
         if not clean_root_id:
@@ -378,12 +363,12 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
             wb = openpyxl.load_workbook(active_stream)
             ws = wb[target_sheet]
             
-            # Map column indices based on user confirmation
-            link_col_idx = headers_map.get(sel_link_col)
-            uni_col_idx = headers_map.get(sel_uni_col) if sel_uni_col != "[Use Sheet Name as University]" else None
-            prog_col_idx = headers_map.get(sel_prog_col) if sel_prog_col != "[Default: General Programme]" else None
-            topic_col_idx = headers_map.get(sel_topic_col) if sel_topic_col != "[Auto: Row Number]" else None
-            deliv_col_idx = headers_map.get(sel_deliv_col) if sel_deliv_col != "[Auto-Detect via AI / Content]" else None
+            # Map column indices based on user selection
+            link_col_idx = col_mapping.get(sel_link_col)
+            uni_col_idx = col_mapping.get(sel_uni_col) if sel_uni_col != "[Use Sheet Name as University]" else None
+            prog_col_idx = col_mapping.get(sel_prog_col) if sel_prog_col != "[Default: General Programme]" else None
+            topic_col_idx = col_mapping.get(sel_topic_col) if sel_topic_col != "[Auto: Row Number]" else None
+            deliv_col_idx = col_mapping.get(sel_deliv_col) if sel_deliv_col != "[Auto-Detect via AI / Content]" else None
             
             # Setup QA Report Link column
             report_col_name = "QA Report Link"
@@ -393,7 +378,7 @@ if "sheet_names" in st.session_state and st.session_state["sheet_names"]:
                     report_col_idx = col_idx
                     break
             if not report_col_idx:
-                report_col_idx = max(headers_map.values()) + 1 if headers_map else ws.max_column + 1
+                report_col_idx = max(col_mapping.values()) + 1 if col_mapping else ws.max_column + 1
                 ws.cell(row=header_row_idx, column=report_col_idx, value=report_col_name)
 
             total_rows = ws.max_row - header_row_idx
