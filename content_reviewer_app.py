@@ -33,7 +33,14 @@ except ImportError:
     PdfReader = None
 
 # Modular Project Services
-from services.access_manager import load_access_config, verify_user
+# 1. Retain Stage 1, Stage 3, and Manuscript Lifecycle tools from unified_engine
+from services.unified_engine import (
+    run_stage_1_maker,
+    run_stage_3_prompt_audit,
+    list_manuscripts
+)
+
+# 2. Universal Stage 2 QA Builder (Real, Dynamic 7-Tab Reports)
 from services.universal_qa_builder import (
     run_universal_academic_audit,
     generate_mcq_workbook,
@@ -43,9 +50,9 @@ from services.universal_qa_builder import (
     build_docx_dossier_enhanced
 )
 
+# 3. Live bridge replacing the hardcoded Stage 2 mock
 def run_stage_2_checker(doc_text, chk_syllabus="", engine="Google Gemini"):
-    """Live universal bridge: dynamically fetches uploaded manuscript text."""
-    # Ensure text is not empty
+    """Live universal bridge: passes actual uploaded manuscript to universal engine."""
     real_text = doc_text if (doc_text and len(str(doc_text).strip()) > 50) else st.session_state.get("draft_text", "")
     deliverable = st.session_state.get("selected_type", "SLM")
     
@@ -55,7 +62,6 @@ def run_stage_2_checker(doc_text, chk_syllabus="", engine="Google Gemini"):
         syllabus_text=chk_syllabus,
         engine=engine
     )
-
 # -------------------------------------------------------------
 # PAGE CONFIGURATION
 # -------------------------------------------------------------
