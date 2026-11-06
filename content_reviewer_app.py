@@ -1251,7 +1251,13 @@ else:
 
             if st.button("⚡ Run Stage 2 Academic QA & Syllabus Cross-Check", type="primary", key="adm_chk_run"):
                 with st.spinner("Auditing against 12 parameters and syllabus..."):
-                    audit_data = run_universal_academic_audit(st.session_state.get("draft_text", ""), selected_type)
+  selected_type = st.session_state.get("loaded_meta", {}).get("format", "SLM") if "selected_type" not in locals() else selected_type
+res = audit_data = run_universal_academic_audit(
+    doc_text=st.session_state.get("draft_text", ""),
+    deliverable=selected_type,
+    syllabus_text=adm_csyl if "adm_csyl" in locals() else "",
+    engine="Google Gemini"
+)
                     st.session_state.stage2_results = res
                     if st.session_state.loaded_manuscript_id and not str(st.session_state.loaded_manuscript_id).startswith("UPLOAD"):
                         update_manuscript_review(st.session_state.loaded_manuscript_id, user_email, stage2_results=res)
