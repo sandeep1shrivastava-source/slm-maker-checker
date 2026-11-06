@@ -34,13 +34,27 @@ except ImportError:
 
 # Modular Project Services
 from services.access_manager import load_access_config, verify_user
-from services.unified_engine import run_stage_1_maker, run_stage_2_checker, run_stage_3_prompt_audit
-try:
-    from services.depository_manager import list_manuscripts, update_manuscript_review, save_manuscript_draft
-except ImportError:
-    def list_manuscripts(): return []
-    def update_manuscript_review(*args, **kwargs): pass
-    def save_manuscript_draft(*args, **kwargs): pass
+from services.universal_qa_builder import (
+    run_universal_academic_audit,
+    generate_mcq_workbook,
+    generate_slm_workbook,
+    generate_qb_workbook,
+    generate_ppt_workbook,
+    build_docx_dossier_enhanced
+)
+
+def run_stage_2_checker(doc_text, chk_syllabus="", engine="Google Gemini"):
+    """Live universal bridge: dynamically fetches uploaded manuscript text."""
+    # Ensure text is not empty
+    real_text = doc_text if (doc_text and len(str(doc_text).strip()) > 50) else st.session_state.get("draft_text", "")
+    deliverable = st.session_state.get("selected_type", "SLM")
+    
+    return run_universal_academic_audit(
+        doc_text=real_text,
+        deliverable=deliverable,
+        syllabus_text=chk_syllabus,
+        engine=engine
+    )
 
 # -------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -1217,7 +1231,7 @@ else:
 
             if st.button("⚡ Run Stage 2 Academic QA & Syllabus Cross-Check", type="primary", key="adm_chk_run"):
                 with st.spinner("Auditing against 12 parameters and syllabus..."):
-                    res = run_stage_2_checker(st.session_state.draft_text, adm_csyl, "")
+                    audit_data = run_universal_academic_audit(st.session_state.get("draft_text", ""), selected_type)
                     st.session_state.stage2_results = res
                     if st.session_state.loaded_manuscript_id and not str(st.session_state.loaded_manuscript_id).startswith("UPLOAD"):
                         update_manuscript_review(st.session_state.loaded_manuscript_id, user_email, stage2_results=res)
