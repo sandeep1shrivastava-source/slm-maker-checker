@@ -1316,7 +1316,15 @@ else:
 
             st.markdown("###### Download Audit Outcome Dossiers")
             file_pfx = f"{selected_university}_{selected_program}_{st.session_state.loaded_manuscript_id or 'Manuscript'}".replace(" ", "_")
-            xl = build_stage2_qa_excel(s2, selected_university, selected_program, selected_deliverable, selected_batch, selected_term)
+            # Route download to authentic multi-tab generator
+            if selected_deliverable == "MCQ":
+                xl = generate_mcq_workbook(s2)
+            elif selected_deliverable == "SLM":
+                xl = generate_slm_workbook(s2)
+            elif selected_deliverable == "QB":
+                xl = generate_qb_workbook(s2)
+            else:
+                xl = generate_ppt_workbook(s2)
             docx_audit = build_stage2_qa_docx(s2, selected_university, selected_program, selected_deliverable, selected_batch, selected_term)
             
             c_d1, c_d2 = st.columns(2)
@@ -1338,6 +1346,10 @@ else:
                     
                     # 1. Dynamically resolve the manuscript text to fix empty inputs
                     current_text = ""
+                    if st.session_state.get("draft_text") and str(st.session_state["draft_text"]).strip():
+                        current_text = str(st.session_state["draft_text"]).strip()
+                    elif st.session_state.get("manuscript_text") and str(st.session_state["manuscript_text"]).strip():
+                        current_text = str(st.session_state["manuscript_text"]).strip()
                     if "manuscript_text" in st.session_state and st.session_state["manuscript_text"]:
                         current_text = st.session_state["manuscript_text"]
                     elif "doc_text" in st.session_state and st.session_state["doc_text"]:
