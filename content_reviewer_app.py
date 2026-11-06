@@ -8,7 +8,14 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import docx
 from docx.shared import Inches, Pt, RGBColor
-
+from services.universal_qa_builder import (
+    run_universal_academic_audit,
+    generate_mcq_workbook,
+    generate_slm_workbook,
+    generate_qb_workbook,
+    generate_ppt_workbook,
+    build_docx_dossier_enhanced
+)
 # -----------------------------------------------------------------------------
 # 1. PAGE SETUP & SECRETS
 # -----------------------------------------------------------------------------
@@ -446,6 +453,60 @@ Audit against:
 
 MANUSCRIPT: {doc_text[:35000]}
 SYLLABUS: {syllabus_text[:10000] if syllabus_text else "Extract units and topics from question labels."}
+# --- FORENSIC QA REPORT & EXECUTIVE DOSSIER SECTION ---
+        st.markdown("---")
+        st.markdown("### 📊 Generate Forensic Quality Reports")
+        
+        up_syl = st.file_uploader("Upload Course Syllabus / Outline (Optional - .docx or .pdf):", type=["docx", "pdf", "txt"], key="rev_syl_file")
+        syl_text_input = extract_text_from_file(up_syl) if up_syl else ""
+
+        if st.button(f"🚀 Generate Forensic {selected_type} Audit Reports", type="primary"):
+            with st.spinner(f"Auditing {selected_type} against pedagogical rubrics..."):
+                audit_result_data = run_universal_academic_audit(
+                    doc_text, 
+                    selected_type, 
+                    syllabus_text=syl_text_input, 
+                    engine="Google Gemini"
+                )
+                
+                # 1. Generate Deliverable-Specific Multi-Tab Excel Workbook
+                if selected_type == "MCQ":
+                    excel_out = generate_mcq_workbook(audit_result_data)
+                elif selected_type == "SLM":
+                    excel_out = generate_slm_workbook(audit_result_data)
+                elif selected_type == "QB":
+                    excel_out = generate_qb_workbook(audit_result_data)
+                else: # PPT
+                    excel_out = generate_ppt_workbook(audit_result_data)
+
+                # 2. Generate Extra Report: Executive Word Dossier (.docx)
+                docx_out = build_docx_dossier_enhanced(
+                    audit_result_data, 
+                    "upGrad Academic Partner", 
+                    selected_type, 
+                    uploaded_file.name.rsplit(".", 1)[0]
+                )
+
+                st.success("✅ Audit Completed! Both Forensic Excel Report and Executive Word Dossier are ready.")
+
+                # Download Buttons
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    st.download_button(
+                        label=f"📊 Download Forensic {selected_type} QA Report (.xlsx)",
+                        data=excel_out,
+                        file_name=f"{uploaded_file.name.rsplit('.', 1)[0]}_{selected_type}_QA_Report.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        type="primary"
+                    )
+                with col_d2:
+                    st.download_button(
+                        label=f"📄 Download Executive QA Dossier (.docx) [Extra Report]",
+                        data=docx_out,
+                        file_name=f"{uploaded_file.name.rsplit('.', 1)[0]}_{selected_type}_Executive_Dossier.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="secondary"
+                    )
 
 Return ONLY valid JSON matching this schema:
 {{
