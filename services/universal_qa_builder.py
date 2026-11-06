@@ -2,6 +2,8 @@ import io
 import re
 import os
 import json
+import urllib.request
+import urllib.error
 import openpyxl
 import pandas as pd
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -95,9 +97,9 @@ def build_syllabus_sheet(wb, syl_list):
     ws.column_dimensions["E"].width = 80
     return ws
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------
 # 2. DELIVERABLE-SPECIFIC WORKBOOK GENERATORS
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------
 def generate_mcq_workbook(data: dict) -> io.BytesIO:
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -366,8 +368,64 @@ def build_docx_dossier_enhanced(audit_data: dict, institution: str, deliverable:
     return out
 
 # -----------------------------------------------------------------------------
-# 3. UNIVERSAL AI PROMPT ENGINE
+# 3. UNIVERSAL AI PROMPT & LLM CALLER (ZERO-DEPENDENCY GEMINI + OPENAI)
 # -----------------------------------------------------------------------------
+def call_llm(prompt: str, engine: str = "Google Gemini") -> str:
+    """Zero-dependency caller: Uses Python standard library urllib REST API, ensuring zero package conflicts."""
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+    
+    try:
+        import streamlit as st
+        if not gemini_key and hasattr(st, "secrets"):
+            gemini_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+        if not openai_key and hasattr(st, "secrets"):
+            openai_key = st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        pass
+
+    # 1. Try Gemini via standard REST API (no pip package required)
+    if ("Gemini" in engine or not openai_key) and gemini_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
+            res = model.generate_content(prompt)
+            return res.text
+        except Exception:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json"}
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    res_obj = json.loads(response.read().decode("utf-8"))
+                    return res_obj["candidates"][0]["content"]["parts"][0]["text"]
+            except Exception as rest_err:
+                print("Gemini REST error:", rest_err)
+
+    # 2. Try OpenAI
+    if openai_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=openai_key)
+            resp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
+            return resp.choices[0].message.content
+        except Exception as oai_err:
+            print("OpenAI error:", oai_err)
+
+    raise RuntimeError("No working LLM available. Please ensure GEMINI_API_KEY is configured in Streamlit Secrets.")
+
 def run_universal_academic_audit(doc_text: str, deliverable: str, syllabus_text: str = "", engine: str = "Google Gemini") -> dict:
     prompts = {
         "MCQ": f"""You are a Principal Academic QA Reviewer auditing a Multiple Choice Question (MCQ) Bank.
@@ -501,23 +559,7 @@ Return ONLY valid JSON:
     }
 
     selected_prompt = prompts.get(deliverable, prompts["SLM"])
-    raw_response = ""
-
-    if "Gemini" in engine:
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-        model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
-        response = model.generate_content(selected_prompt)
-        raw_response = response.text
-    else:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": selected_prompt}],
-            response_format={"type": "json_object"}
-        )
-        raw_response = response.choices[0].message.content
+    raw_response = call_llm(selected_prompt, engine=engine)
 
     clean_json = re.sub(r"^```json\s*", "", raw_response.strip())
     clean_json = re.sub(r"\s*```$", "", clean_json.strip())
