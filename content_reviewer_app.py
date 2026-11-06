@@ -1261,69 +1261,68 @@ else:
         st.markdown("---")
         st.markdown("### 📊 Generate New Multi-Tab QA Reports (CN Format)")
         
-        if st.button("🚀 Generate Multi-Tab Excel & Word Dossier", type="primary"):
-            with st.spinner("Generating new forensic formats..."):
-                
-                # 1. Safely grab the text and format type from your existing variables
-                current_text = doc_text if 'doc_text' in locals() else ""
-                current_type = selected_type if 'selected_type' in locals() else "SLM"
-                
-                # 2. Safely generate a clean file prefix (e.g. "Computer Networks" -> "CN")
-                try:
-                    # Tries to get the name from your uploaded file variable
-                    raw_name = uploaded_file.name if 'uploaded_file' in locals() else uploaded_manuscript.name
-                    raw_name = raw_name.rsplit('.', 1)[0]
-                except Exception:
-                    raw_name = "Academic_Module"
-                
-                words = [w for w in raw_name.replace("_", " ").split() if w[0].isalnum()]
-                code_prefix = "".join([w[0].upper() for w in words]) if words else "MODULE"
-                
-                # 3. Run the new universal audit engine
-                audit_data = run_universal_academic_audit(
-                    current_text, 
-                    current_type, 
-                    syllabus_text="", 
-                    engine="Google Gemini"
-                )
-                
-                # 4. Generate the specific multi-tab Excel workbook
-                if current_type == "MCQ":
-                    excel_stream = generate_mcq_workbook(audit_data)
-                elif current_type == "SLM":
-                    excel_stream = generate_slm_workbook(audit_data)
-                elif current_type == "QB":
-                    excel_stream = generate_qb_workbook(audit_data)
-                else:
-                    excel_stream = generate_ppt_workbook(audit_data)
-                    
-                # 5. Generate the new Word Dossier
-                docx_stream = build_docx_dossier_enhanced(
-                    audit_data, 
-                    "upGrad Academic Partner", 
-                    current_type, 
-                    raw_name
-                )
-                
-                out_xlsx_name = f"{code_prefix}_{current_type}_QA_Report.xlsx"
-                out_docx_name = f"{code_prefix}_{current_type}_Executive_Dossier.docx"
-                
-                st.success(f"✅ Successfully generated {out_xlsx_name}!")
-                
-                # 6. Display Download Buttons
-                col_dl1, col_dl2 = st.columns(2)
-                with col_dl1:
-                    st.download_button(
-                        label=f"📊 Download {out_xlsx_name}",
-                        data=excel_stream,
-                        file_name=out_xlsx_name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                with col_dl2:
-                    st.download_button(
-                        label=f"📄 Download {out_docx_name}",
-                        data=docx_stream,
-                        file_name=out_docx_name,
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    )
+       if st.button("🚀 Generate Multi-Tab Excel & Word Dossier", type="primary"):
+         try:
+             with st.spinner("Generating new forensic formats..."):
+                 # 1. Safely grab text and format
+                 current_text = doc_text if 'doc_text' in locals() else ""
+                 current_type = selected_type if 'selected_type' in locals() else "SLM"
+
+                 try:
+                     raw_name = uploaded_file.name if 'uploaded_file' in locals() else uploaded_manuscript.name
+                     raw_name = raw_name.rsplit('.', 1)[0]
+                 except Exception:
+                     raw_name = "Academic_Module"
+
+                 words = [w for w in raw_name.replace("_", " ").split() if w[0].isalnum()]
+                 code_prefix = "".join([w[0].upper() for w in words]) if words else "MODULE"
+
+                 # 2. Run Universal Academic Audit
+                 audit_data = run_universal_academic_audit(
+                     current_text, 
+                     current_type, 
+                     syllabus_text="", 
+                     engine="Google Gemini"
+                 )
+
+                 # 3. Build Multi-Tab Excel Workbook
+                 if current_type == "MCQ":
+                     excel_stream = generate_mcq_workbook(audit_data)
+                 elif current_type == "SLM":
+                     excel_stream = generate_slm_workbook(audit_data)
+                 elif current_type == "QB":
+                     excel_stream = generate_qb_workbook(audit_data)
+                 else:
+                     excel_stream = generate_ppt_workbook(audit_data)
+
+                 # 4. Build Executive Word Dossier
+                 docx_stream = build_docx_dossier_enhanced(
+                     audit_data, 
+                     "upGrad Academic Partner", 
+                     current_type, 
+                     raw_name
+                 )
+
+                 out_xlsx_name = f"{code_prefix}_{current_type}_QA_Report.xlsx"
+                 out_docx_name = f"{code_prefix}_{current_type}_Executive_Dossier.docx"
+
+                 st.success(f"✅ Successfully generated {out_xlsx_name}!")
+
+                 col_dl1, col_dl2 = st.columns(2)
+                 with col_dl1:
+                     st.download_button(
+                         label=f"📊 Download {out_xlsx_name}",
+                         data=excel_stream,
+                         file_name=out_xlsx_name,
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                     )
+                 with col_dl2:
+                     st.download_button(
+                         label=f"📄 Download {out_docx_name}",
+                         data=docx_stream,
+                         file_name=out_docx_name,
+                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                     )
+         except Exception as e:
+             st.error(f"❌ Report Generation Error: {str(e)}")
         # =====================================================================
