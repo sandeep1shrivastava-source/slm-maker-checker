@@ -1250,15 +1250,39 @@ else:
             """)
 
             if st.button("⚡ Run Stage 2 Academic QA & Syllabus Cross-Check", type="primary", key="adm_chk_run"):
-                with st.spinner("Running Stage 2 Academic QA & Syllabus Cross-Check..."):
-                    selected_type = st.session_state.get("loaded_meta", {}).get("format", "SLM") if "selected_type" not in locals() else selected_type
-                    adm_syl = adm_csyl if "adm_csyl" in locals() else ""
-                    res = audit_data = run_universal_academic_audit(
-                        doc_text=st.session_state.get("draft_text", ""),
-                        deliverable=selected_type,
-                        syllabus_text=adm_syl,
-                        engine="Google Gemini"
-                    )
+               with st.spinner("Running Stage 2 Academic QA & Syllabus Cross-Check..."):
+            # 1. Resolve format
+            selected_type = st.session_state.get("loaded_meta", {}).get("format", "SLM") if "selected_type" not in locals() else selected_type
+            adm_syl = adm_csyl if "adm_csyl" in locals() else ""
+            
+            # 2. Universal Manuscript Text Resolution
+            real_text = st.session_state.get("draft_text", "")
+            if not real_text or len(str(real_text).strip()) < 50:
+                meta = st.session_state.get("loaded_meta", {})
+                for k in ["content", "text", "draft", "raw_text", "body", "payload"]:
+                    if meta.get(k) and len(str(meta[k]).strip()) > 50:
+                        real_text = meta[k]
+                        break
+            if not real_text or len(str(real_text).strip()) < 50:
+                for var_k in ["uploaded_text", "manuscript_text", "doc_text", "active_text"]:
+                    if var_k in locals() and locals()[var_k] and len(str(locals()[var_k]).strip()) > 50:
+                        real_text = locals()[var_k]
+                        break
+                    if var_k in st.session_state and st.session_state[var_k] and len(str(st.session_state[var_k]).strip()) > 50:
+                        real_text = st.session_state[var_k]
+                        break
+                        
+            # Sync back so both reports share the payload
+            st.session_state["draft_text"] = real_text
+
+            res = audit_data = run_universal_academic_audit(
+                doc_text=real_text,
+                deliverable=selected_type,
+                syllabus_text=adm_syl,
+                engine="Google Gemini"
+            )
+            st.session_state.stage2_results = res
+            st.success("Stage 2 QA Audit complete!")
                     st.session_state.stage2_results = res
                     st.success("Stage 2 QA Audit complete!")
                     if st.session_state.loaded_manuscript_id and not str(st.session_state.loaded_manuscript_id).startswith("UPLOAD"):
