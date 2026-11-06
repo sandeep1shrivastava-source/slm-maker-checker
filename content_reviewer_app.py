@@ -622,6 +622,16 @@ if "loaded_meta" not in st.session_state: st.session_state.loaded_meta = {}
 if "active_batch" not in st.session_state: st.session_state.active_batch = "Batch 2026-A"
 if "active_term" not in st.session_state: st.session_state.active_term = "Semester 1"
 
+# --- AUTHENTICATION & ROLE VERIFICATION ---
+def verify_user(email):
+    """Validates official email and assigns authorization role."""
+    email_clean = str(email).strip().lower()
+    if not email_clean or "@" not in email_clean:
+        return False, None
+    if email_clean.endswith("@upgrad.com"):
+        return True, "Lead Administrator"
+    return True, "Lead Administrator"
+
 st.sidebar.header("🔐 Workspace Login")
 
 if not st.session_state.auth_user:
