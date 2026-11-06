@@ -371,46 +371,90 @@ def build_docx_dossier_enhanced(audit_data: dict, institution: str, deliverable:
 # 3. UNIVERSAL AI PROMPT & LLM CALLER (ZERO-DEPENDENCY GEMINI + OPENAI)
 # -----------------------------------------------------------------------------
 def call_llm(prompt: str, engine: str = "Google Gemini") -> str:
-    """Zero-dependency caller: Uses Python standard library urllib REST API, ensuring zero package conflicts."""
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-    
+    """Robust LLM caller checking all secret formats and reporting exact API errors."""
+    import os
+    import json
+    import urllib.request
+    import urllib.error
+
+    gemini_key = None
+    openai_key = None
+
+    # 1. Inspect Streamlit Secrets across all naming conventions
     try:
         import streamlit as st
-        if not gemini_key and hasattr(st, "secrets"):
-            gemini_key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
-        if not openai_key and hasattr(st, "secrets"):
-            openai_key = st.secrets.get("OPENAI_API_KEY")
+        # Direct key checks
+        for k in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "gemini_api_key", "google_api_key", "GEMINI_KEY", "google_key"]:
+            if k in st.secrets and str(st.secrets[k]).strip():
+                gemini_key = str(st.secrets[k]).strip()
+                break
+        for k in ["OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY"]:
+            if k in st.secrets and str(st.secrets[k]).strip():
+                openai_key = str(st.secrets[k]).strip()
+                break
+        # Nested TOML table check (e.g., [gemini] api_key = "...")
+        if not gemini_key and "gemini" in st.secrets:
+            try:
+                gemini_key = str(st.secrets["gemini"]["api_key"]).strip()
+            except Exception:
+                pass
+        if not openai_key and "openai" in st.secrets:
+            try:
+                openai_key = str(st.secrets["openai"]["api_key"]).strip()
+            except Exception:
+                pass
     except Exception:
         pass
 
-    # 1. Try Gemini via standard REST API (no pip package required)
-    if ("Gemini" in engine or not openai_key) and gemini_key:
+    # 2. Inspect Environment Variables fallback
+    if not gemini_key:
+        for k in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "gemini_api_key", "google_api_key"]:
+            if os.environ.get(k) and os.environ.get(k).strip():
+                gemini_key = os.environ.get(k).strip()
+                break
+
+    if not openai_key:
+        for k in ["OPENAI_API_KEY", "openai_api_key"]:
+            if os.environ.get(k) and os.environ.get(k).strip():
+                openai_key = os.environ.get(k).strip()
+                break
+
+    # 3. Call Gemini
+    if gemini_key:
+        # Method A: Use google.generativeai SDK if available
         try:
             import google.generativeai as genai
             genai.configure(api_key=gemini_key)
             model = genai.GenerativeModel("gemini-1.5-flash", generation_config={"response_mime_type": "application/json"})
             res = model.generate_content(prompt)
             return res.text
-        except Exception:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json"}
-            }
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=90) as response:
-                    res_obj = json.loads(response.read().decode("utf-8"))
-                    return res_obj["candidates"][0]["content"]["parts"][0]["text"]
-            except Exception as rest_err:
-                print("Gemini REST error:", rest_err)
+        except ImportError:
+            pass
+        except Exception as sdk_err:
+            pass
 
-    # 2. Try OpenAI
+        # Method B: Direct standard REST API call
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as response:
+                res_obj = json.loads(response.read().decode("utf-8"))
+                return res_obj["candidates"][0]["content"]["parts"][0]["text"]
+        except urllib.error.HTTPError as http_err:
+            err_body = http_err.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Gemini API HTTP Error {http_err.code}: {err_body}")
+        except Exception as rest_err:
+            raise RuntimeError(f"Gemini Connection Error: {rest_err}")
+
+    # 4. Fallback: Call OpenAI
     if openai_key:
         try:
             from openai import OpenAI
@@ -422,10 +466,21 @@ def call_llm(prompt: str, engine: str = "Google Gemini") -> str:
             )
             return resp.choices[0].message.content
         except Exception as oai_err:
-            print("OpenAI error:", oai_err)
+            raise RuntimeError(f"OpenAI API Error: {oai_err}")
 
-    raise RuntimeError("No working LLM available. Please ensure GEMINI_API_KEY is configured in Streamlit Secrets.")
+    # 5. Diagnostic reporting if keys are entirely missing
+    keys_detected = []
+    try:
+        import streamlit as st
+        keys_detected = list(st.secrets.keys())
+    except Exception:
+        pass
 
+    raise RuntimeError(
+        f"Missing API key. Checked: GEMINI_API_KEY, GOOGLE_API_KEY, OPENAI_API_KEY. "
+        f"Configured keys in Streamlit Secrets: {keys_detected}. "
+        f"Please verify secret names in Streamlit Cloud > Settings > Secrets."
+    )
 def run_universal_academic_audit(doc_text: str, deliverable: str, syllabus_text: str = "", engine: str = "Google Gemini") -> dict:
     prompts = {
         "MCQ": f"""You are a Principal Academic QA Reviewer auditing a Multiple Choice Question (MCQ) Bank.
