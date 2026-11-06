@@ -415,39 +415,32 @@ def call_llm(prompt: str, engine: str = "Google Gemini") -> str:
 
     # 1. Try Gemini with header-based auth (key is NEVER in URL)
     if gemini_key:
-        models_to_try = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-        for m_name in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent"
-            payload = {
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": prompt}]
-                    }
-                ],
-                "generationConfig": {
-                    "responseMimeType": "application/json"
-                }
-            }
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "x-goog-api-key": gemini_key
-                }
-            )
-            try:
-                with urllib.request.urlopen(req, timeout=90) as response:
-                    res_obj = json.loads(response.read().decode("utf-8"))
-                    text_out = res_obj["candidates"][0]["content"]["parts"][0]["text"]
-                    if text_out and text_out.strip():
-                        return text_out
-            except urllib.error.HTTPError as h_err:
-                body = h_err.read().decode("utf-8", errors="ignore")
-                api_errors.append(f"Gemini {m_name} (HTTP {h_err.code}): {body[:180]}")
-            except Exception as e:
-                api_errors.append(f"Gemini {m_name} Error: {str(e)[:180]}")
+       # 1. Try Gemini with active models and automatic ListModels discovery
+    if gemini_key:
+        models_to_try = [
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-2.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-2.5-flash-lite"
+        ]
+
+        # Dynamically discover supported generateContent models for this key
+        try:
+            list_url = "https://generativelanguage.googleapis.com/v1beta/models"
+            list_req = urllib.request.Request(list_url, headers={"x-goog-api-key": gemini_key})
+            with urllib.request.urlopen(list_req, timeout=10) as l_resp:
+                m_data = json.loads(l_resp.read().decode("utf-8"))
+                discovered = []
+                for m in m_data.get("models", []):
+                    if "generateContent" in m.get("supportedGenerationMethods", []):
+                        clean_name = m.get("name", "").replace("models/", "")
+                        if "flash" in clean_name.lower():
+                            discovered.append(clean_name)
+                if discovered:
+                    models_to_try = discovered + [m for m in models_to_try if m not in discovered]
+        except Exception:
+            pass
 
     # 2. Try OpenAI fallback
     if openai_key:
