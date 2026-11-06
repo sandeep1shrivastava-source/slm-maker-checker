@@ -33,14 +33,13 @@ except ImportError:
     PdfReader = None
 
 # Modular Project Services
-# 1. Retain Stage 1, Stage 3, and Manuscript Lifecycle tools from unified_engine
+# 1. Native Unified Engine tools (Stage 1 and Stage 3 only)
 from services.unified_engine import (
     run_stage_1_maker,
-    run_stage_3_prompt_audit,
-    list_manuscripts
+    run_stage_3_prompt_audit
 )
 
-# 2. Universal Stage 2 QA Builder (Real, Dynamic 7-Tab Reports)
+# 2. Universal Stage 2 QA Engine (Dynamic 7-Tab Reports)
 from services.universal_qa_builder import (
     run_universal_academic_audit,
     generate_mcq_workbook,
@@ -52,16 +51,21 @@ from services.universal_qa_builder import (
 
 # 3. Live bridge replacing the hardcoded Stage 2 mock
 def run_stage_2_checker(doc_text, chk_syllabus="", engine="Google Gemini"):
-    """Live universal bridge: passes actual uploaded manuscript to universal engine."""
     real_text = doc_text if (doc_text and len(str(doc_text).strip()) > 50) else st.session_state.get("draft_text", "")
     deliverable = st.session_state.get("selected_type", "SLM")
-    
     return run_universal_academic_audit(
         doc_text=real_text,
         deliverable=deliverable,
         syllabus_text=chk_syllabus,
         engine=engine
     )
+def list_manuscripts():
+    """Returns active manuscript queue from session state or uploads."""
+    if "manuscript_queue" in st.session_state:
+        return st.session_state["manuscript_queue"]
+    if "loaded_manuscript_id" in st.session_state and st.session_state["loaded_manuscript_id"]:
+        return [{"id": st.session_state["loaded_manuscript_id"], "title": "Current Active Manuscript", "status": "Ready for Audit"}]
+    return []
 # -------------------------------------------------------------
 # PAGE CONFIGURATION
 # -------------------------------------------------------------
