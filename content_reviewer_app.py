@@ -195,46 +195,56 @@ def save_feature_flags(flags: dict):
 # -------------------------------------------------------------
 # EMAIL OTP DISPATCH ENGINE
 # -------------------------------------------------------------
-def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
-    """Dispatches a 6-digit OTP via SMTP with an automatic Dev Mode fallback."""
+def dispatch_email_otp(recipient_email, otp_code):
+    """Dispatches 6-digit OTP using Port 465 SSL or Port 587 STARTTLS."""
+    import smtplib, ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
     smtp_cfg = st.secrets.get("smtp", {})
-    server_host = smtp_cfg.get("server", "smtp.gmail.com")
-    server_port = int(smtp_cfg.get("port", 587))
-    sender_email = smtp_cfg.get("sender_email", "")
-    sender_password = smtp_cfg.get("sender_password", "")
+    host = smtp_cfg.get("server", "smtp.gmail.com")
+    port = int(smtp_cfg.get("port", 465))
+    user = smtp_cfg.get("user", "")
+    pwd = smtp_cfg.get("password", "")
+    sender = smtp_cfg.get("sender", user)
 
-    # Dev/Test fallback: displays OTP on-screen if SMTP is not yet configured in Secrets
-    if not sender_email or not sender_password:
-        st.sidebar.warning(f"⚠️ [Dev Mode active]: Test OTP is **{otp_code}**")
-        return True
+    if not user or not pwd:
+        print(f"[AUTH CONSOLE] SMTP credentials missing. OTP for {recipient_email}: {otp_code}")
+        return False
 
-    msg = MIMEMultipart()
-    msg["From"] = f"Academic Quality Console <{sender_email}>"
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"{otp_code} is your upGrad SLM Quality Portal Verification Code"
+    msg["From"] = f"upGrad SLM QA <{sender}>"
     msg["To"] = recipient_email
-    msg["Subject"] = f"Your Login Code: {otp_code}"
 
-    body = f"""Hello,
-
-Your One-Time Password (OTP) for the Academic Publishing & QA Console is:
-
-    ========================================
-                    {otp_code}
-    ========================================
-
-This code expires in 5 minutes. If you did not request this code, contact your Lead Administrator.
-
-Academic Publishing & QA Pipeline
-"""
-    msg.attach(MIMEText(body, "plain"))
+    html = f"""
+    <div style='font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; max-width: 480px;'>
+        <h3 style='color: #c82333; margin-top: 0;'>upGrad SLM Quality Portal</h3>
+        <p>Your one-time login verification code is:</p>
+        <div style='background: #f4f4f4; padding: 14px; text-align: center; border-radius: 6px; margin: 18px 0;'>
+            <span style='font-size: 30px; font-weight: bold; letter-spacing: 5px; color: #111;'>{otp_code}</span>
+        </div>
+        <p style='font-size: 12px; color: #777;'>Valid for 5 minutes. If you did not request this, please disregard.</p>
+    </div>
+    """
+    msg.attach(MIMEText(html, "html"))
 
     try:
-        with smtplib.SMTP(server_host, server_port) as server:
-            server.starttls()
-            server.login(sender_email, sender_password)
-            server.send_message(msg)
+        if port == 465:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(host, port, context=ctx, timeout=12) as server:
+                server.login(user, pwd)
+                server.sendmail(sender, recipient_email, msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=12) as server:
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+                server.login(user, pwd)
+                server.sendmail(sender, recipient_email, msg.as_string())
         return True
-    except Exception as err:
-        st.sidebar.error(f"Failed to dispatch OTP email: {err}")
+    except Exception as e:
+        print(f"[SMTP Error]: {e}")
         return False
 
 # -------------------------------------------------------------
