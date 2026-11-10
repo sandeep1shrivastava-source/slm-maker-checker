@@ -4,4 +4,8 @@ venv/
 .streamlit/secrets.toml
 __pycache__/
 *.xlsx
-*.pyc
+*.pyc*.bak 
+fix_*.py 
+inspect_*.py 
+repair_app.py 
+update_smtp_ssl.py 
