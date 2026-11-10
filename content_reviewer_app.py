@@ -77,6 +77,7 @@ DEFAULT_CATALOG = {
 }
 
 DEFAULT_ROLES = {
+    "sandeep1.shrivastava@upgrad.com": "Admin",
     "sandeep.shrivastava@upgrad.com": "Admin",
     "admin@upgrad.com": "Admin",
     "checker@upgrad.com": "Checker",
