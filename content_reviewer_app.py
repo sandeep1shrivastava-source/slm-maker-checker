@@ -1,6 +1,7 @@
 """
 Academic SLM Maker-Checker QA Platform
-Enterprise Edition with Enhanced Graphical Presentation & Adaptive Model Routing
+Enterprise Edition: Adaptive Gemini Routing, Plotly Visual Analytics,
+Safe Multi-format Dossier Exports, and Self-Serve Queue Workflow.
 """
 
 import io
@@ -30,7 +31,7 @@ from docx.oxml.ns import qn
 import google.generativeai as genai
 
 # ==============================================================================
-# 1. STREAMLIT CONFIGURATION & STYLING
+# 1. STREAMLIT CONFIGURATION & CUSTOM STYLING
 # ==============================================================================
 st.set_page_config(
     page_title="Academic SLM QA Platform",
@@ -378,7 +379,6 @@ STANDARD_PARAMETERS = [
 ]
 
 def get_available_gemini_models():
-    """Queries Google AI API for all models supporting generateContent."""
     priority_order = [
         "gemini-1.5-pro",
         "gemini-1.5-pro-latest",
@@ -394,7 +394,6 @@ def get_available_gemini_models():
             if "generateContent" in getattr(m, "supported_generation_methods", [])
         ]
         if supported:
-            # Sort by priority order
             ordered = [c for c in priority_order if c in supported]
             for s in supported:
                 if s not in ordered:
@@ -516,7 +515,7 @@ def reconcile_and_audit(raw_audit: dict, manuscript_text: str):
     return audit_df, defect_df, total_score, syllabus_cov, determination
 
 # ==============================================================================
-# 5. DOSSIER EXPORT GENERATORS
+# 5. DOSSIER EXPORT GENERATORS (Defensive Mapping & Proper Scoping)
 # ==============================================================================
 def generate_docx_report(audit_df, defect_df, meta):
     doc = docx.Document()
@@ -526,15 +525,18 @@ def generate_docx_report(audit_df, defect_df, meta):
     r_title.font.size = Pt(16)
     r_title.font.color.rgb = RGBColor(30, 58, 138)
     
-    doc.add_paragraph(f"Stage 2 SME Quality & Syllabus Cross-Audit | {meta['university_name']} - {meta['program_name']}")
+    doc.add_paragraph(f"Stage 2 SME Quality & Syllabus Cross-Audit | {meta.get('university_name', '')} - {meta.get('program_name', '')}")
     doc.add_paragraph("―" * 60)
 
     meta_table = doc.add_table(rows=3, cols=2)
     meta_table.autofit = True
     cells = [
-        (0, 0, f"University: {meta['university_name']}"), (0, 1, f"Determination: {meta['determination']}"),
-        (1, 0, f"Academic Program: {meta['program_name']}"), (1, 1, f"Quality Score: {meta['quality_score']:.1f} / 100"),
-        (2, 0, f"Batch / Term: {meta['batch_term']}"), (2, 1, f"Syllabus Coverage: {meta['syllabus_coverage']:.1f}%"),
+        (0, 0, f"University: {meta.get('university_name', '')}"),
+        (0, 1, f"Determination: {meta.get('determination', '')}"),
+        (1, 0, f"Academic Program: {meta.get('program_name', '')}"),
+        (1, 1, f"Quality Score: {float(meta.get('quality_score', 0)):.1f} / 100"),
+        (2, 0, f"Batch / Term: {meta.get('batch_term', '')}"),
+        (2, 1, f"Syllabus Coverage: {float(meta.get('syllabus_coverage', 0)):.1f}%"),
     ]
     for r, c, txt in cells:
         cell = meta_table.cell(r, c)
@@ -546,26 +548,23 @@ def generate_docx_report(audit_df, defect_df, meta):
     doc.add_heading("1. 12-Parameter Quality Matrix", level=2)
     table = doc.add_table(rows=1, cols=6, style="Table Grid")
     hdr_cells = table.rows[0].cells
-    for _, row in audit_df.iterrows():
-        row_cells = table.add_row().cells
-        row_cells[0].text = str(row.get("Param #", ""))
-        row_cells[1].text = str(row.get("QA Dimension", ""))
-        row_cells[2].text = str(row.get("Weight", ""))
-        row_cells[3].text = f"{float(row.get('Score Achieved', 0)):.1f}"
-        row_cells[4].text = str(row.get("Status", ""))
-        row_cells[5].text = str(row.get("Auditor Findings", ""))
+    for i, title in enumerate(["#", "Dimension", "Weight", "Score", "Status", "Findings"]):
+        hdr_cells[i].text = title
+        hdr_cells[i].paragraphs[0].runs[0].bold = True
 
-    for _, d_row in defect_df.iterrows():
-            rc = d_table.add_row().cells
-            rc[0].text = str(d_row.get("Defect ID", ""))
-            rc[1].text = str(d_row.get("Parameter", ""))
-            rc[2].text = str(d_row.get("Severity", ""))
-            rc[3].text = str(d_row.get("Finding", ""))
-            rc[4].text = str(d_row.get("Remediation", ""))
+    if audit_df is not None and not audit_df.empty:
+        for _, row in audit_df.iterrows():
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(row.get("Param #", ""))
+            row_cells[1].text = str(row.get("QA Dimension", ""))
+            row_cells[2].text = str(row.get("Weight", ""))
+            row_cells[3].text = f"{float(row.get('Score Achieved', 0)):.1f}"
+            row_cells[4].text = str(row.get("Status", ""))
+            row_cells[5].text = str(row.get("Auditor Findings", ""))
 
     doc.add_paragraph()
     doc.add_heading("2. Defect Register", level=2)
-    if defect_df.empty:
+    if defect_df is None or defect_df.empty:
         doc.add_paragraph("Zero critical or major defects identified. The manuscript is compliant.")
     else:
         d_table = doc.add_table(rows=1, cols=5, style="Table Grid")
@@ -575,7 +574,11 @@ def generate_docx_report(audit_df, defect_df, meta):
             d_hdr[i].paragraphs[0].runs[0].bold = True
         for _, d_row in defect_df.iterrows():
             rc = d_table.add_row().cells
-            for i, val in enumerate(d_row): rc[i].text = str(val)
+            rc[0].text = str(d_row.get("Defect ID", ""))
+            rc[1].text = str(d_row.get("Parameter", ""))
+            rc[2].text = str(d_row.get("Severity", ""))
+            rc[3].text = str(d_row.get("Finding", ""))
+            rc[4].text = str(d_row.get("Remediation", ""))
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -584,14 +587,22 @@ def generate_docx_report(audit_df, defect_df, meta):
 def generate_excel_report(audit_df, defect_df, meta):
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        audit_df.to_excel(writer, sheet_name="Scorecard", index=False)
-        defect_df.to_excel(writer, sheet_name="Defect Register", index=False)
+        if audit_df is not None and not audit_df.empty:
+            audit_df.to_excel(writer, sheet_name="Scorecard", index=False)
+        else:
+            pd.DataFrame([{"Notice": "No audit data"}]).to_excel(writer, sheet_name="Scorecard", index=False)
+
+        if defect_df is not None and not defect_df.empty:
+            defect_df.to_excel(writer, sheet_name="Defect Register", index=False)
+        else:
+            pd.DataFrame([{"Notice": "No defects recorded"}]).to_excel(writer, sheet_name="Defect Register", index=False)
+
         pd.DataFrame([
-            {"Key": "University", "Value": meta["university_name"]},
-            {"Key": "Academic Program", "Value": meta["program_name"]},
-            {"Key": "Batch / Term", "Value": meta["batch_term"]},
-            {"Key": "Determination", "Value": meta["determination"]},
-            {"Key": "Quality Score", "Value": f"{meta['quality_score']:.1f} / 100"},
+            {"Key": "University", "Value": meta.get("university_name", "")},
+            {"Key": "Academic Program", "Value": meta.get("program_name", "")},
+            {"Key": "Batch / Term", "Value": meta.get("batch_term", "")},
+            {"Key": "Determination", "Value": meta.get("determination", "")},
+            {"Key": "Quality Score", "Value": f"{float(meta.get('quality_score', 0)):.1f} / 100"},
             {"Key": "Audit Timestamp", "Value": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         ]).to_excel(writer, sheet_name="Audit Summary", index=False)
     return buf.getvalue()
@@ -601,11 +612,11 @@ def generate_excel_report(audit_df, defect_df, meta):
 # ==============================================================================
 def render_donut_chart(score):
     fig = go.Figure(go.Indicator(
-        mode = "gauge+number",
-        value = score,
-        domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': "Quality Score", 'font': {'size': 24}},
-        gauge = {
+        mode="gauge+number",
+        value=score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': "Quality Score", 'font': {'size': 24}},
+        gauge={
             'axis': {'range': [None, 100], 'tickwidth': 1},
             'bar': {'color': "#2563eb" if score >= 75 else ("#f59e0b" if score >= 60 else "#ef4444")},
             'bgcolor': "white",
@@ -628,7 +639,7 @@ def render_radar_chart(df):
     return fig
 
 # ==============================================================================
-# 7. MAIN CONTROLLER
+# 7. MAIN CONTROLLER & TABS
 # ==============================================================================
 def main():
     if not st.session_state["authenticated"]:
@@ -698,7 +709,6 @@ def main():
         </div>
     """, unsafe_allow_html=True)
 
-    # Dynamic Tab Routing
     if st.session_state["user_role"] == "Admin":
         tab_titles = ["📤 Submit Deliverable", "📥 Audit Inbox", "📊 Quality Dashboard", "🚨 Defect Register", "✅ Sign-Off & Exports", "📈 Platform Analytics", "🏛️ Catalog", "🛡️ RBAC"]
     elif st.session_state["user_role"] == "Checker":
@@ -799,7 +809,6 @@ def main():
         if st.session_state["audit_completed"] and st.session_state["audit_df"] is not None:
             st.markdown("### Quality Analytics Dashboard")
             
-            # Top KPI Row
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Overall Quality Score", f"{st.session_state['quality_score']:.1f} / 100")
             c2.metric("Syllabus Coverage", f"{st.session_state['syllabus_coverage']:.1f}%")
@@ -810,7 +819,6 @@ def main():
 
             st.divider()
             
-            # Visual Charts Row
             chart_col1, chart_col2 = st.columns([1, 2])
             with chart_col1:
                 st.plotly_chart(render_donut_chart(st.session_state["quality_score"]), use_container_width=True)
