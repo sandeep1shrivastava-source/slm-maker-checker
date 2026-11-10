@@ -1,6 +1,6 @@
 """
 Academic SLM Maker-Checker QA Platform
-Enterprise Edition with Enhanced Graphical Presentation
+Enterprise Edition with Enhanced Graphical Presentation & Adaptive Model Routing
 """
 
 import io
@@ -39,7 +39,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for enhanced presentation
 st.markdown("""
 <style>
     .stMetric {
@@ -173,7 +172,6 @@ def load_ledger() -> pd.DataFrame:
         "Semester", "File Name", "Quality Score", "Determination"
     ])
 
-# Initialize persistent session state
 SESSION_DEFAULTS = {
     "authenticated": False,
     "user_email": "",
@@ -198,7 +196,7 @@ for key, val in SESSION_DEFAULTS.items():
         st.session_state[key] = val
 
 # ==============================================================================
-# 3. RBAC AUTHENTICATION & DISPATCH
+# 3. RBAC AUTHENTICATION & SMTP DISPATCH
 # ==============================================================================
 def get_secret(key_path, default=None):
     keys = key_path.split(".")
@@ -293,7 +291,6 @@ def render_login_screen():
             else:
                 st.info(f"Verification code sent to: **{st.session_state['user_email']}**")
                 assigned_role = roles_registry.get(st.session_state["user_email"], "Maker")
-                
                 st.markdown(f"Resolved Authority Level: <span style='color:#2563eb; font-weight:bold;'>{assigned_role}</span>", unsafe_allow_html=True)
 
                 entered_otp = st.text_input("Enter 6-Digit OTP", max_chars=6, type="password")
@@ -314,10 +311,11 @@ def render_login_screen():
                         st.rerun()
 
 # ==============================================================================
-# 4. TEXT EXTRACTION & AUDIT LOGIC (Unchanged core logic)
+# 4. TEXT EXTRACTION & ADAPTIVE GEMINI AUDIT ENGINE
 # ==============================================================================
 def extract_text_from_file(file_obj_or_path) -> str:
-    if hasattr(file_obj_or_path, "seek"): file_obj_or_path.seek(0)
+    if hasattr(file_obj_or_path, "seek"):
+        file_obj_or_path.seek(0)
     filename = getattr(file_obj_or_path, "name", str(file_obj_or_path)).lower()
     content = ""
     try:
@@ -379,6 +377,33 @@ STANDARD_PARAMETERS = [
     {"param_no": 12, "dimension": "Pedagogical Scaffolding & Formatting", "weight": 6},
 ]
 
+def get_available_gemini_models():
+    """Queries Google AI API for all models supporting generateContent."""
+    priority_order = [
+        "gemini-1.5-pro",
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-2.0-flash",
+        "gemini-pro"
+    ]
+    try:
+        supported = [
+            m.name.replace("models/", "")
+            for m in genai.list_models()
+            if "generateContent" in getattr(m, "supported_generation_methods", [])
+        ]
+        if supported:
+            # Sort by priority order
+            ordered = [c for c in priority_order if c in supported]
+            for s in supported:
+                if s not in ordered:
+                    ordered.append(s)
+            return ordered
+    except Exception:
+        pass
+    return ["gemini-1.5-flash", "gemini-1.5-pro-latest", "gemini-1.5-pro", "gemini-2.0-flash"]
+
 def run_gemini_academic_audit(manuscript_text: str, syllabus_text: str = ""):
     api_key = get_secret("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -386,8 +411,8 @@ def run_gemini_academic_audit(manuscript_text: str, syllabus_text: str = ""):
         st.stop()
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-1.5-pro", generation_config={"temperature": 0.0, "response_mime_type": "application/json"})
-    
+    candidate_models = get_available_gemini_models()
+
     prompt = f"""
     You are an expert Chief Academic Auditor for Higher Education Self-Learning Materials (SLM).
     Evaluate the provided manuscript rigorously against UGC-DEB benchmarks, Bloom's Revised Taxonomy, and reference syllabus specifications.
@@ -420,10 +445,22 @@ def run_gemini_academic_audit(manuscript_text: str, syllabus_text: str = ""):
     ### MANUSCRIPT CONTENT (EXCERPT/FULL):
     {manuscript_text[:35000]}
     """
-    try: return clean_and_parse_json(model.generate_content(prompt).text)
-    except Exception as e:
-        st.error(f"❌ Gemini Evaluation Engine Error: {type(e).__name__} - {str(e)}")
-        st.stop()
+
+    last_error = None
+    for model_name in candidate_models:
+        try:
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                generation_config={"temperature": 0.0, "response_mime_type": "application/json"}
+            )
+            response = model.generate_content(prompt)
+            return clean_and_parse_json(response.text)
+        except Exception as e:
+            last_error = e
+            continue
+
+    st.error(f"❌ Gemini Evaluation Engine Error across tested endpoints ({', '.join(candidate_models)}): {str(last_error)}")
+    st.stop()
 
 def reconcile_and_audit(raw_audit: dict, manuscript_text: str):
     matrix_data = raw_audit.get("matrix", [])
@@ -772,7 +809,6 @@ def main():
                 st.plotly_chart(render_radar_chart(st.session_state["audit_df"]), use_container_width=True)
 
             st.markdown("### 12-Parameter Quality Matrix")
-            # Style the dataframe based on status
             def highlight_status(val):
                 color = '#dcfce7' if val == 'COMPLIANT' else '#fee2e2'
                 return f'background-color: {color}'
@@ -874,7 +910,6 @@ def main():
 
             st.divider()
             
-            # Trend Chart
             if len(ledger_df) > 1:
                 ledger_df['Date'] = pd.to_datetime(ledger_df['Timestamp']).dt.date
                 trend_df = ledger_df.groupby('Date')['Quality Score'].mean().reset_index()
