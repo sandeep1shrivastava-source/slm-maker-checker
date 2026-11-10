@@ -546,13 +546,22 @@ def generate_docx_report(audit_df, defect_df, meta):
     doc.add_heading("1. 12-Parameter Quality Matrix", level=2)
     table = doc.add_table(rows=1, cols=6, style="Table Grid")
     hdr_cells = table.rows[0].cells
-    for i, title in enumerate(["#", "Dimension", "Weight", "Score", "Status", "Findings"]):
-        hdr_cells[i].text = title
-        hdr_cells[i].paragraphs[0].runs[0].bold = True
-
     for _, row in audit_df.iterrows():
         row_cells = table.add_row().cells
-        for i, val in enumerate(row): row_cells[i].text = str(val)
+        row_cells[0].text = str(row.get("Param #", ""))
+        row_cells[1].text = str(row.get("QA Dimension", ""))
+        row_cells[2].text = str(row.get("Weight", ""))
+        row_cells[3].text = f"{float(row.get('Score Achieved', 0)):.1f}"
+        row_cells[4].text = str(row.get("Status", ""))
+        row_cells[5].text = str(row.get("Auditor Findings", ""))
+
+    for _, d_row in defect_df.iterrows():
+            rc = d_table.add_row().cells
+            rc[0].text = str(d_row.get("Defect ID", ""))
+            rc[1].text = str(d_row.get("Parameter", ""))
+            rc[2].text = str(d_row.get("Severity", ""))
+            rc[3].text = str(d_row.get("Finding", ""))
+            rc[4].text = str(d_row.get("Remediation", ""))
 
     doc.add_paragraph()
     doc.add_heading("2. Defect Register", level=2)
