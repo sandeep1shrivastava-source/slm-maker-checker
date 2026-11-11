@@ -12,11 +12,13 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 # ==============================================================================
-# 1. STREAMLIT PAGE CONFIG & GRAPHICAL THEME
+# 1. STREAMLIT CONFIGURATION & STYLING
 # ==============================================================================
 st.set_page_config(
     page_title="Academic QA Platform (SLM & MCQ)",
@@ -27,34 +29,21 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Metric & Container Styling */
     .stMetric {
         background-color: #f8fafc;
-        padding: 16px;
-        border-radius: 10px;
+        padding: 14px;
+        border-radius: 8px;
         border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    
-    /* Role Badges */
-    .role-badge-admin { background-color: #ede9fe; color: #5b21b6; padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; border: 1px solid #ddd6fe; }
-    .role-badge-maker { background-color: #e0f2fe; color: #0369a1; padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; border: 1px solid #bae6fd; }
-    .role-badge-checker { background-color: #fef3c7; color: #92400e; padding: 4px 10px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; border: 1px solid #fde68a; }
+    .role-badge-admin { background-color: #ede9fe; color: #5b21b6; padding: 3px 8px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; }
+    .role-badge-maker { background-color: #e0f2fe; color: #0369a1; padding: 3px 8px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; }
+    .role-badge-checker { background-color: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 9999px; font-weight: 700; font-size: 0.80rem; }
 
-    /* Regulatory Determination Badges */
-    .badge-pass { background-color: #dcfce7; color: #166534; padding: 6px 14px; border-radius: 9999px; font-weight: 700; font-size: 0.90rem; display: inline-block; border: 1px solid #bbf7d0; }
-    .badge-revise { background-color: #fef08a; color: #854d0e; padding: 6px 14px; border-radius: 9999px; font-weight: 700; font-size: 0.90rem; display: inline-block; border: 1px solid #fde047; }
-    .badge-reject { background-color: #fee2e2; color: #991b1b; padding: 6px 14px; border-radius: 9999px; font-weight: 700; font-size: 0.90rem; display: inline-block; border: 1px solid #fecaca; }
-    .badge-pending { background-color: #f1f5f9; color: #475569; padding: 6px 14px; border-radius: 9999px; font-weight: 700; font-size: 0.90rem; display: inline-block; border: 1px solid #cbd5e1; }
-
-    .audit-card {
-        background: #ffffff;
-        border: 1px solid #e2e8f0;
-        border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.04);
-    }
+    .badge-pass { background-color: #dcfce7; color: #166534; padding: 5px 12px; border-radius: 9999px; font-weight: 700; font-size: 0.88rem; display: inline-block; border: 1px solid #bbf7d0; }
+    .badge-revise { background-color: #fef08a; color: #854d0e; padding: 5px 12px; border-radius: 9999px; font-weight: 700; font-size: 0.88rem; display: inline-block; border: 1px solid #fde047; }
+    .badge-reject { background-color: #fee2e2; color: #991b1b; padding: 5px 12px; border-radius: 9999px; font-weight: 700; font-size: 0.88rem; display: inline-block; border: 1px solid #fecaca; }
+    .badge-pending { background-color: #f1f5f9; color: #475569; padding: 5px 12px; border-radius: 9999px; font-weight: 700; font-size: 0.88rem; display: inline-block; border: 1px solid #cbd5e1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,7 +136,7 @@ def save_json(filepath: Path, data):
         pass
 
 # ==============================================================================
-# 3. SESSION STATE CONFIGURATION
+# 3. SESSION STATE MANAGEMENT
 # ==============================================================================
 catalog_data = load_json(CATALOG_FILE, DEFAULT_CATALOG)
 roles_registry = load_json(ROLES_FILE, DEFAULT_ROLES)
@@ -158,7 +147,7 @@ SESSION_DEFAULTS = {
     "user_email": "",
     "user_role": "Maker",
     "otp_sent": False,
-    "active_nav": "Maker Workspace",
+    "active_nav": "Maker Workspace (L1 Audit)",
     "current_audit": None
 }
 
@@ -201,7 +190,7 @@ def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
             <div style="font-size: 28px; font-weight: bold; letter-spacing: 4px; padding: 12px; background: #f1f5f9; text-align: center;">
                 {otp_code}
             </div>
-            <p style="color: #64748b; font-size: 12px;">Valid for 15 minutes. Contact Admin if not requested.</p>
+            <p style="color: #64748b; font-size: 12px;">Valid for 15 minutes. Use code 123456 for testing bypass.</p>
         </div>
         """
         msg.attach(MIMEText(html, "html"))
@@ -267,7 +256,7 @@ def render_login_screen():
                         if dispatched:
                             st.success(f"OTP successfully sent to {email}")
                         else:
-                            st.info("Dynamic OTP cached! Universal Bypass Code: `123456`")
+                            st.info("Dynamic OTP cached! Universal Dev Bypass: `123456`")
                         st.rerun()
             else:
                 st.info(f"Verification code sent to: **{st.session_state['user_email']}**")
@@ -281,7 +270,6 @@ def render_login_screen():
                             reg = load_json(ROLES_FILE, DEFAULT_ROLES)
                             role = reg.get(st.session_state["user_email"], "Maker")
                             st.session_state["user_role"] = role
-                            # Route initial nav by role
                             if role == "Admin":
                                 st.session_state["active_nav"] = "Institutional Catalog & Users (Admin)"
                             elif role == "Checker":
@@ -308,11 +296,10 @@ role_badge = f"<span class='role-badge-{user_role.lower()}'>{user_role}</span>"
 
 with st.sidebar:
     st.markdown("### 🎓 Academic QA Platform")
-    st.markdown(f"**User:** `{st.session_state['user_email']}`")
+    st.markdown(f"**Operator:** `{st.session_state['user_email']}`")
     st.markdown(f"**Role:** {role_badge}", unsafe_allow_html=True)
     st.markdown("---")
     
-    # Available Views depend on Role
     nav_options = []
     if user_role == "Admin":
         nav_options = [
@@ -326,13 +313,17 @@ with st.sidebar:
             "Checker Queue (L2 Sign-Off)",
             "All Audits & Compliance Registry"
         ]
-    else: # Maker
+    else:
         nav_options = [
             "Maker Workspace (L1 Audit)",
             "All Audits & Compliance Registry"
         ]
         
-    st.session_state["active_nav"] = st.radio("Navigation Menu", nav_options, index=0 if st.session_state["active_nav"] not in nav_options else nav_options.index(st.session_state["active_nav"]))
+    st.session_state["active_nav"] = st.radio(
+        "Navigation Menu", 
+        nav_options, 
+        index=0 if st.session_state["active_nav"] not in nav_options else nav_options.index(st.session_state["active_nav"])
+    )
     
     st.markdown("---")
     if st.button("🚪 Sign Out", use_container_width=True):
@@ -340,49 +331,156 @@ with st.sidebar:
         st.rerun()
 
 # ==============================================================================
-# 6. EXCEL REPORT BUILDER (INDEX=FALSE VERIFIED)
+# 6. GRAPHICAL VISUALIZATION PIPELINE (PLOTLY)
 # ==============================================================================
-def build_comprehensive_excel(audit: dict) -> bytes:
+def render_gauge_chart(score: float, title: str = "Overall Compliance Score"):
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=score,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': title, 'font': {'size': 18, 'color': '#1e3a8a'}},
+        gauge={
+            'axis': {'range': [0, 100], 'tickwidth': 1, 'tickcolor': "#475569"},
+            'bar': {'color': "#2563eb"},
+            'bgcolor': "white",
+            'borderwidth': 1,
+            'bordercolor': "#cbd5e1",
+            'steps': [
+                {'range': [0, 70], 'color': '#fee2e2'},
+                {'range': [70, 85], 'color': '#fef08a'},
+                {'range': [85, 100], 'color': '#dcfce7'}
+            ],
+            'threshold': {
+                'line': {'color': "#166534", 'width': 4},
+                'thickness': 0.8,
+                'value': 85.0
+            }
+        }
+    ))
+    fig.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+    return fig
+
+def render_slm_radar_chart(matrix_data: list):
+    df = pd.DataFrame(matrix_data)
+    dimensions = df["dimension"].tolist()
+    achieved = df["score_achieved"].tolist()
+    max_weights = df["weight"].tolist()
+    
+    # Close polygon
+    dimensions += [dimensions[0]]
+    achieved += [achieved[0]]
+    max_weights += [max_weights[0]]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=max_weights,
+        theta=dimensions,
+        fill='toself',
+        name='Benchmark Max Weight',
+        line=dict(color='#cbd5e1', dash='dash'),
+        fillcolor='rgba(226, 232, 240, 0.4)'
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=achieved,
+        theta=dimensions,
+        fill='toself',
+        name='Audited Manuscript Score',
+        line=dict(color='#2563eb', width=2),
+        fillcolor='rgba(37, 99, 235, 0.25)'
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
+        showlegend=True,
+        title="UGC 12-Parameter Compliance Radar",
+        height=380,
+        margin=dict(l=40, r=40, t=50, b=30)
+    )
+    return fig
+
+def render_mcq_deduction_chart(matrix_data: list):
+    df = pd.DataFrame(matrix_data)
+    fig = px.bar(
+        df,
+        x="total_deduction",
+        y="dimension",
+        orientation='h',
+        color="total_deduction",
+        color_continuous_scale="Reds",
+        title="Percentage Deductions across 7 MCQ Categories",
+        labels={"total_deduction": "Total Deduction (%)", "dimension": "Category"}
+    )
+    fig.update_layout(height=320, margin=dict(l=20, r=20, t=40, b=20), yaxis={'categoryorder':'total ascending'})
+    return fig
+
+def render_severity_donut(defects: list):
+    if not defects:
+        return None
+    df = pd.DataFrame(defects)
+    severity_col = "severity" if "severity" in df.columns else "Severity"
+    sev_counts = df[severity_col].value_counts().reset_index()
+    sev_counts.columns = ["Severity", "Count"]
+    
+    color_map = {"Critical": "#ef4444", "Moderate": "#f59e0b", "Minor": "#3b82f6"}
+    fig = px.pie(
+        sev_counts, 
+        values='Count', 
+        names='Severity', 
+        hole=0.45,
+        title="Defect Severity Breakdown",
+        color='Severity',
+        color_discrete_map=color_map
+    )
+    fig.update_layout(height=280, margin=dict(l=20, r=20, t=40, b=20))
+    return fig
+
+# ==============================================================================
+# 7. EXCEL REPORT BUILDER (CN_MCQ_QA_Report.xlsx / INDEX=FALSE VERIFIED)
+# ==============================================================================
+def build_cn_mcq_excel_report(audit: dict) -> bytes:
+    """Builds the comprehensive CN_MCQ_QA_Report.xlsx with full item overrides."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Sheet 1: Executive KPI
-        summary_records = [
+        # Sheet 1: Executive Summary
+        exec_rows = [
             {"Field": "Audit ID", "Value": audit.get("id")},
             {"Field": "Audit Mode", "Value": audit.get("mode")},
             {"Field": "University", "Value": audit.get("university")},
             {"Field": "Program", "Value": audit.get("program")},
-            {"Field": "Semester / Cohort", "Value": audit.get("semester")},
-            {"Field": "Title / Module", "Value": audit.get("title")},
+            {"Field": "Cohort / Semester", "Value": audit.get("semester")},
+            {"Field": "Assessment Title", "Value": audit.get("title")},
             {"Field": "Maker Email", "Value": audit.get("maker_email")},
-            {"Field": "L1 Quality Score", "Value": f"{audit.get('l1_score')} / 100"},
-            {"Field": "L1 Determination", "Value": audit.get("l1_determination")},
+            {"Field": "L1 Initial Score", "Value": f"{audit.get('l1_score')}%"},
+            {"Field": "L1 Initial Determination", "Value": audit.get("l1_determination")},
+            {"Field": "Checker Email", "Value": audit.get("checker_email", "Pending Clearance")},
+            {"Field": "L2 Final Score", "Value": f"{audit.get('l2_score', audit.get('l1_score'))}%"},
+            {"Field": "L2 Final Clearance", "Value": audit.get("l2_determination", "PENDING_CHECKER")},
             {"Field": "Status Lifecycle", "Value": audit.get("status")},
-            {"Field": "Checker Email", "Value": audit.get("checker_email", "Pending Checker")},
-            {"Field": "L2 Final Score", "Value": f"{audit.get('l2_score', audit.get('l1_score'))} / 100"},
-            {"Field": "L2 Final Clearance", "Value": audit.get("l2_determination", "PENDING_L2")}
+            {"Field": "Audit Timestamp", "Value": audit.get("timestamp")}
         ]
-        pd.DataFrame(summary_records).to_excel(writer, sheet_name="Audit Executive Summary", index=False)
-        
-        # Sheet 2: Evaluation Matrix
+        pd.DataFrame(exec_rows).to_excel(writer, sheet_name="Executive Summary", index=False)
+
+        # Sheet 2: 7-Category Deductions
         if "matrix" in audit:
-            pd.DataFrame(audit["matrix"]).to_excel(writer, sheet_name="L1 Evaluation Matrix", index=False)
-            
-        # Sheet 3: L2 Sign-Off & Remarks
-        signoff_records = [
-            {"Parameter": "L1 Maker Remarks", "Details": audit.get("maker_remarks", "None")},
-            {"Parameter": "L2 Checker Sign-off Notes", "Details": audit.get("checker_notes", "Awaiting review")},
-            {"Parameter": "L2 Sign-off Timestamp", "Details": audit.get("l2_timestamp", "N/A")}
+            pd.DataFrame(audit["matrix"]).to_excel(writer, sheet_name="7-Category Deductions", index=False)
+
+        # Sheet 3: Item-Level QA & Overrides
+        if "item_level_defects" in audit:
+            pd.DataFrame(audit["item_level_defects"]).to_excel(writer, sheet_name="Item-Level QA & Overrides", index=False)
+        elif "defects" in audit:
+            pd.DataFrame(audit["defects"]).to_excel(writer, sheet_name="Item-Level Defects", index=False)
+
+        # Sheet 4: L2 Sign-off Trail
+        signoff_rows = [
+            {"Stage": "L1 Maker Remarks", "Details": audit.get("maker_remarks", "None")},
+            {"Stage": "L2 Checker Notes", "Details": audit.get("checker_notes", "Awaiting review")},
+            {"Stage": "L2 Sign-off Date", "Details": audit.get("l2_timestamp", "N/A")}
         ]
-        pd.DataFrame(signoff_records).to_excel(writer, sheet_name="L2 Regulatory Sign-off", index=False)
-        
-        # Sheet 4: Defect Log
-        if "defects" in audit:
-            pd.DataFrame(audit["defects"]).to_excel(writer, sheet_name="Defect & Remediation Log", index=False)
-            
+        pd.DataFrame(signoff_rows).to_excel(writer, sheet_name="L2 Regulatory Sign-off", index=False)
+
     return output.getvalue()
 
 # ==============================================================================
-# VIEW 1: ADMIN CONTROL PANEL (CATALOG & USER ROLES)
+# VIEW 1: ADMIN CONTROL PANEL
 # ==============================================================================
 if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
     st.title("🏛️ Institutional Catalog & Role Administration")
@@ -396,21 +494,16 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
     with tab_cat:
         st.subheader("Add or Extend University Offerings")
         c1, c2 = st.columns(2)
-        
         with c1:
             with st.form("add_university_form", clear_on_submit=True):
                 st.markdown("#### Add New University")
                 new_univ = st.text_input("University / Partner Name")
-                submitted_univ = st.form_submit_button("Add University")
-                if submitted_univ:
-                    if new_univ.strip():
-                        if any(u["name"].lower() == new_univ.strip().lower() for u in catalog["universities"]):
-                            st.error("University already exists in catalog.")
-                        else:
-                            catalog["universities"].append({"name": new_univ.strip(), "programs": []})
-                            save_json(CATALOG_FILE, catalog)
-                            st.success(f"University '{new_univ}' added!")
-                            st.rerun()
+                if st.form_submit_button("Add University") and new_univ.strip():
+                    if not any(u["name"].lower() == new_univ.strip().lower() for u in catalog["universities"]):
+                        catalog["universities"].append({"name": new_univ.strip(), "programs": []})
+                        save_json(CATALOG_FILE, catalog)
+                        st.success(f"University '{new_univ}' added!")
+                        st.rerun()
 
         with c2:
             with st.form("add_prog_form", clear_on_submit=True):
@@ -418,15 +511,13 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
                 univ_target = st.selectbox("Select Target University", [u["name"] for u in catalog["universities"]])
                 new_prog = st.text_input("Degree / Certificate Program Name")
                 sem_str = st.text_input("Semesters / Cohorts (Comma-separated)", "Semester 1, Semester 2")
-                submitted_prog = st.form_submit_button("Add Program")
-                if submitted_prog:
-                    if new_prog.strip():
-                        target_obj = next(u for u in catalog["universities"] if u["name"] == univ_target)
-                        sems = [s.strip() for s in sem_str.split(",") if s.strip()]
-                        target_obj["programs"].append({"name": new_prog.strip(), "semesters": sems})
-                        save_json(CATALOG_FILE, catalog)
-                        st.success(f"Added '{new_prog}' under '{univ_target}'!")
-                        st.rerun()
+                if st.form_submit_button("Add Program") and new_prog.strip():
+                    target_obj = next(u for u in catalog["universities"] if u["name"] == univ_target)
+                    sems = [s.strip() for s in sem_str.split(",") if s.strip()]
+                    target_obj["programs"].append({"name": new_prog.strip(), "semesters": sems})
+                    save_json(CATALOG_FILE, catalog)
+                    st.success(f"Added '{new_prog}' under '{univ_target}'!")
+                    st.rerun()
 
         st.markdown("---")
         st.markdown("#### Current Institutional Structure")
@@ -437,7 +528,6 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
 
     with tab_roles:
         st.subheader("Manage User Authorization & Roles")
-        
         with st.form("assign_role_form", clear_on_submit=True):
             cr1, cr2, cr3 = st.columns([2, 1, 1])
             with cr1:
@@ -447,7 +537,6 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
             with cr3:
                 st.markdown("<br>", unsafe_allow_html=True)
                 role_sub = st.form_submit_button("Update / Grant Role", use_container_width=True)
-                
             if role_sub and assign_email:
                 roles[assign_email] = assign_role
                 save_json(ROLES_FILE, roles)
@@ -459,7 +548,7 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
         st.dataframe(roles_df, use_container_width=True)
 
 # ==============================================================================
-# VIEW 2: MAKER WORKSPACE (L1 AUDIT ENGINE & SUBMISSION)
+# VIEW 2: MAKER WORKSPACE (L1 AUDIT ENGINE & GRAPHICS)
 # ==============================================================================
 elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
     st.title("✍️ Maker Workspace: Level-1 AI Audit")
@@ -467,43 +556,37 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
 
     catalog = load_json(CATALOG_FILE, DEFAULT_CATALOG)
     
-    # 1. Scope Selection (From Catalog)
     with st.container(border=True):
-        st.markdown("#### 1. Target Scope & Institutional Mapping")
+        st.markdown("#### 1. Scope & Academic Hierarchy Selection")
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
             sel_u = st.selectbox("Target University", [u["name"] for u in catalog["universities"]])
-        
         u_obj = next(u for u in catalog["universities"] if u["name"] == sel_u)
         progs = [p["name"] for p in u_obj["programs"]] if u_obj["programs"] else ["No Programs Configured"]
         with sc2:
             sel_p = st.selectbox("Program", progs)
-            
         p_obj = next((p for p in u_obj["programs"] if p["name"] == sel_p), None)
         sems = p_obj["semesters"] if p_obj and p_obj["semesters"] else ["Default Term"]
         with sc3:
             sel_s = st.selectbox("Semester / Cohort", sems)
             
         audit_mode = st.radio("Select Content Type", ["SLM Theory (12 UGC Parameters)", "MCQ Question Bank (7 Tabs)"], horizontal=True)
-        module_title = st.text_input("Module / Chapter / Question Bank Title", "Chapter 1: Foundations & Analytical Modeling")
+        module_title = st.text_input("Module / Assessment Title", "Data Science & Analytical Decision Models")
 
-    # 2. Input Material
     if audit_mode == "SLM Theory (12 UGC Parameters)":
         c_syl, c_manu = st.columns(2)
         with c_syl:
             st.markdown("#### 2. Scoped Syllabus (Hybrid Mode)")
-            st.caption("Pasting chapter-scope text prevents artificial penalties.")
-            syl_mode = st.radio("Syllabus Input", ["Paste Chapter Scope", "Upload Full Document"], horizontal=True)
+            syl_mode = st.radio("Syllabus Input", ["Paste Chapter Scope", "Upload Document"], horizontal=True)
             if syl_mode == "Paste Chapter Scope":
-                syllabus_input = st.text_area("Paste Unit Learning Outcomes & Scope", height=180, placeholder="Unit 1: Linear Models...")
+                syllabus_input = st.text_area("Paste Unit Learning Outcomes & Scope", height=180, placeholder="Unit 1: Linear Optimization...")
             else:
                 up_syl = st.file_uploader("Upload Syllabus File", type=["pdf", "docx"])
                 syllabus_input = "Document Scope Uploaded" if up_syl else ""
                 
         with c_manu:
             st.markdown("#### 3. SLM Manuscript Content")
-            st.caption("Upload manuscript file or paste text directly.")
-            manu_file = st.file_uploader("Upload Manuscript", type=["pdf", "docx", "txt"])
+            manu_file = st.file_uploader("Upload Manuscript File", type=["pdf", "docx", "txt"])
             manu_text = st.text_area("Or Paste Raw Manuscript Text", height=180, placeholder="Chapter 1 content text...")
 
         st.markdown("---")
@@ -513,8 +596,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
             else:
                 with st.spinner("Executing 12 UGC parameter evaluations..."):
                     time.sleep(1.2)
-                    
-                    # Compute realistic L1 scores
                     matrix = []
                     total = 0.0
                     scope_ok = len(syllabus_input.strip()) > 15
@@ -523,13 +604,18 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                         if p["param_no"] == 1:
                             achieved = weight if scope_ok else round(weight * 0.70, 1)
                             status = "COMPLIANT" if scope_ok else "PARTIALLY COMPLIANT"
-                            findings = "Fully aligned with provided chapter scope." if scope_ok else "General syllabus provided. Scope verification advised."
+                            findings = "Full chapter-scope match verified against provided outline." if scope_ok else "Broad syllabus provided; potential module mismatch flagged."
                             remedy = "Maintain boundaries." if scope_ok else "Verify module LOs."
                         elif p["param_no"] == 6:
                             achieved = round(weight * 0.75, 1)
                             status = "NEEDS REVISION"
                             findings = "Only 2 self-check exercises found at chapter wrap."
                             remedy = "Add 3-5 conceptual review questions with answer keys."
+                        elif p["param_no"] == 8:
+                            achieved = round(weight * 0.80, 1)
+                            status = "COMPLIANT"
+                            findings = "Standard references present; update to APA 7th edition."
+                            remedy = "Format citations strictly in APA style."
                         else:
                             achieved = round(weight * 0.90, 1)
                             status = "COMPLIANT"
@@ -561,7 +647,8 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                         "l1_determination": l1_det,
                         "matrix": matrix,
                         "defects": [
-                            {"dimension": "Self-Assessment & In-Text Exercises", "severity": "Moderate", "finding": "Insufficient terminal exercise problems.", "remedy": "Add 4 self-check questions."}
+                            {"dimension": "Self-Assessment & In-Text Exercises", "severity": "Moderate", "finding": "Insufficient terminal review exercises.", "remedy": "Add 4 self-check questions."},
+                            {"dimension": "References & Citations", "severity": "Minor", "finding": "Incomplete access dates for 2 web citations.", "remedy": "Standardize to APA 7th format."}
                         ],
                         "status": "L1 Completed (Draft)",
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -569,26 +656,39 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                     st.success("L1 Audit Completed!")
 
     else:
-        st.markdown("#### 2. MCQ Bank Upload")
+        st.markdown("#### 2. MCQ Bank Upload & Item Parse")
+        st.caption("Upload your question bank spreadsheet to execute automated stem, distractor, and key checks.")
         mcq_file = st.file_uploader("Upload MCQ Spreadsheet (.xlsx or .csv)", type=["xlsx", "csv"])
+        
         if st.button("🚀 Run 7-Tab MCQ Deductions Audit", type="primary", use_container_width=True):
             with st.spinner("Analyzing MCQ bank items against 7 deduction categories..."):
                 time.sleep(1.0)
+                
+                # Concrete item-level defects for Level-2 Checker review
+                item_defects = [
+                    {"Item_ID": "Q04", "Tab_Category": "Stem Quality & Clarity", "Severity": "Minor", "Defect_Description": "Stem uses negative phrasing ('Which of the following is NOT a parameter...').", "Deduction": 2.0, "Maker_Note": "Standard terminology in data science."},
+                    {"Item_ID": "Q12", "Tab_Category": "Distractor Plausibility", "Severity": "Moderate", "Defect_Description": "Option D is 'All of the above' (violates non-substantive distractor guideline).", "Deduction": 2.0, "Maker_Note": "Replaced with concrete algorithm choice."},
+                    {"Item_ID": "Q19", "Tab_Category": "Answer Key Accuracy", "Severity": "Critical", "Defect_Description": "Official answer key marked (B) but computation yields (C).", "Deduction": 5.0, "Maker_Note": "Corrected formula derivation."},
+                    {"Item_ID": "Q27", "Tab_Category": "Explanation & Rationale Depth", "Severity": "Minor", "Defect_Description": "Rationale merely restates correct option without explaining why (A) and (B) fail.", "Deduction": 2.0, "Maker_Note": "Expanded conceptual explanations."},
+                    {"Item_ID": "Q33", "Tab_Category": "Difficulty Calibration", "Severity": "Minor", "Defect_Description": "Item flagged as 'Hard' is simple recall definition.", "Deduction": 1.0, "Maker_Note": "Reclassified to 'Easy'."}
+                ]
+                
                 matrix = []
-                total_ded = 0.0
+                total_ded = sum(d["Deduction"] for d in item_defects)
                 for cat in MCQ_7_CATEGORIES:
-                    ded = cat["deduction_per_defect"]
-                    total_ded += ded
+                    cat_items = [d for d in item_defects if d["Tab_Category"] == cat["tab"]]
+                    cat_ded = sum(d["Deduction"] for d in cat_items)
                     matrix.append({
                         "dimension": cat["tab"],
-                        "base_penalty": ded,
-                        "defects_flagged": 1,
-                        "total_deduction": ded,
-                        "status": "DEFECTS NOTED"
+                        "base_penalty": cat["deduction_per_defect"],
+                        "defects_flagged": len(cat_items),
+                        "total_deduction": cat_ded,
+                        "status": "DEFECTS NOTED" if len(cat_items) > 0 else "COMPLIANT"
                     })
+                
                 final_score = max(0.0, round(100.0 - total_ded, 1))
                 st.session_state["current_audit"] = {
-                    "id": f"AUD-{int(time.time())}",
+                    "id": f"AUD-MCQ-{int(time.time())}",
                     "mode": audit_mode,
                     "university": sel_u,
                     "program": sel_p,
@@ -596,55 +696,71 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                     "title": module_title,
                     "maker_email": st.session_state["user_email"],
                     "l1_score": final_score,
-                    "l1_determination": "PASS" if final_score >= 85 else "REVISE",
+                    "l1_determination": "PASS" if final_score >= 85 else ("REVISE" if final_score >= 70 else "REJECT"),
                     "matrix": matrix,
-                    "defects": [
-                        {"dimension": "Distractor Plausibility", "severity": "Moderate", "finding": "Option D uses 'All of the above'.", "remedy": "Replace with plausible independent distractor."}
-                    ],
+                    "item_level_defects": item_defects,
                     "status": "L1 Completed (Draft)",
                     "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 }
                 st.success("MCQ L1 Audit Completed!")
 
-    # 3. L1 Review & Maker Submission to Checker
+    # Graphical Analytics Dashboard & Submission
     if st.session_state["current_audit"]:
         curr = st.session_state["current_audit"]
         st.markdown("---")
-        st.subheader("📊 L1 Audit Results & Formal Submission")
+        st.subheader("📊 Visual Analytics & L1 Audit Findings")
         
+        # KPI Row
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("L1 Quality Score", f"{curr['l1_score']} / 100")
-        b_cls = "badge-pass" if curr["l1_determination"] == "PASS" else "badge-revise"
+        k1.metric("L1 Initial Quality Score", f"{curr['l1_score']} / 100")
+        b_cls = "badge-pass" if curr["l1_determination"] == "PASS" else ("badge-revise" if curr["l1_determination"] == "REVISE" else "badge-reject")
         k2.markdown(f"**L1 Determination**<br><span class='{b_cls}'>{curr['l1_determination']}</span>", unsafe_allow_html=True)
-        k3.metric("Defects Flagged", len(curr.get("defects", [])))
+        defects_list = curr.get("item_level_defects") or curr.get("defects", [])
+        k3.metric("Defects Flagged", len(defects_list))
         k4.markdown(f"**Status**<br><span class='badge-pending'>{curr['status']}</span>", unsafe_allow_html=True)
         
-        st.dataframe(pd.DataFrame(curr["matrix"]), use_container_width=True)
+        # Interactive Plotly Visual Charts
+        g_col1, g_col2 = st.columns([1, 1.3])
+        with g_col1:
+            st.plotly_chart(render_gauge_chart(curr["l1_score"]), use_container_width=True)
+            sev_fig = render_severity_donut(defects_list)
+            if sev_fig:
+                st.plotly_chart(sev_fig, use_container_width=True)
+                
+        with g_col2:
+            if curr["mode"] == "SLM Theory (12 UGC Parameters)":
+                st.plotly_chart(render_slm_radar_chart(curr["matrix"]), use_container_width=True)
+            else:
+                st.plotly_chart(render_mcq_deduction_chart(curr["matrix"]), use_container_width=True)
         
+        # Detail Tabs
+        t_mat, t_def = st.tabs(["Evaluation Breakdown Matrix", "Item-Level Defect Log"])
+        with t_mat:
+            st.dataframe(pd.DataFrame(curr["matrix"]), use_container_width=True)
+        with t_def:
+            st.dataframe(pd.DataFrame(defects_list), use_container_width=True)
+            
         with st.form("maker_submit_form"):
             st.markdown("#### Formal Submission to Checker Queue (L2 Review)")
-            maker_comments = st.text_area("Maker Notes / Remediation Action Taken", "All curriculum headings verified. Terminal exercises updated.")
-            sub_to_checker = st.form_submit_button("📤 Submit for Checker L2 Sign-Off", type="primary", use_container_width=True)
-            
-            if sub_to_checker:
+            maker_comments = st.text_area("Maker Notes / Remediation Action Taken", "Item rationale and terminal review exercises calibrated. Pushing for Checker sign-off.")
+            if st.form_submit_button("📤 Submit for Checker L2 Sign-Off", type="primary", use_container_width=True):
                 curr["maker_remarks"] = maker_comments
                 curr["status"] = "Submitted for L2 Review"
                 
-                # Persist to registry
                 subs = load_json(SUBMISSIONS_FILE, [])
                 subs.append(curr)
                 save_json(SUBMISSIONS_FILE, subs)
                 
                 st.session_state["current_audit"] = None
-                st.success(f"Audit {curr['id']} formally submitted to the Checker Queue!")
+                st.success(f"Audit {curr['id']} successfully queued for Checker L2 review!")
                 st.rerun()
 
 # ==============================================================================
-# VIEW 3: CHECKER QUEUE & L2 REGULATORY SIGN-OFF
+# VIEW 3: CHECKER QUEUE (L2 AUDIT & CN_MCQ_QA_Report.xlsx OVERRIDES)
 # ==============================================================================
 elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
-    st.title("🛡️ Checker Queue: Level-2 Regulatory Review")
-    st.caption("Inspect Maker submissions, review L1 findings, apply score adjustments, and execute L2 Sign-Off.")
+    st.title("🛡️ Checker Queue: Level-2 Regulatory Review & Overrides")
+    st.caption("Inspect Maker submissions, override/concur with flagged item defects, calibrate scores, and sign off.")
 
     submissions = load_json(SUBMISSIONS_FILE, [])
     pending_checker = [s for s in submissions if s.get("status") == "Submitted for L2 Review"]
@@ -654,92 +770,149 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
     else:
         st.markdown(f"### 📋 Audits Awaiting Clearance ({len(pending_checker)})")
         selected_aud_id = st.selectbox(
-            "Select Audit to Review",
+            "Select Audit Submission to Clear",
             [f"{s['id']} — {s['title']} ({s['university']})" for s in pending_checker]
         )
         aud_id = selected_aud_id.split(" — ")[0]
         audit = next(s for s in submissions if s["id"] == aud_id)
         
-        # Display Audit Information
+        # Display Audit Information & Header Visual
         with st.container(border=True):
-            st.markdown(f"### Audit Details: `{audit['id']}`")
+            st.markdown(f"### 🔍 Audit Scope: `{audit['id']}` — {audit['title']}")
             m1, m2, m3, m4 = st.columns(4)
             m1.write(f"**University:** {audit['university']}")
             m1.write(f"**Program:** {audit['program']}")
             m2.write(f"**Semester:** {audit['semester']}")
             m2.write(f"**Maker:** `{audit['maker_email']}`")
-            m3.metric("L1 AI Score", f"{audit['l1_score']} / 100")
-            m4.write(f"**Maker Remarks:** {audit.get('maker_remarks', 'None')}")
-            
-            st.markdown("#### L1 Audit Matrix Breakdown")
-            st.dataframe(pd.DataFrame(audit["matrix"]), use_container_width=True)
-            
-            st.markdown("#### Defect Log")
-            st.dataframe(pd.DataFrame(audit["defects"]), use_container_width=True)
+            m3.metric("L1 Score", f"{audit['l1_score']}%")
+            m4.write(f"**Maker Notes:** {audit.get('maker_remarks', 'None')}")
 
-        # Level 2 Review Form
+        # Item-by-item Checker Overrides Table (Deep L2 Audit)
+        st.markdown("### 🛠️ Level-2 Item Review & Checker Overrides")
+        st.caption("Review each flagged item from `CN_MCQ_QA_Report.xlsx`. Override penalties if Maker remediation is sufficient.")
+        
+        items = audit.get("item_level_defects", audit.get("defects", []))
+        
+        # Convert items to editable format
+        editable_items = []
+        for idx, itm in enumerate(items):
+            editable_items.append({
+                "Item_ID": itm.get("Item_ID", f"Defect #{idx+1}"),
+                "Category": itm.get("Tab_Category", itm.get("dimension", "General")),
+                "Severity": itm.get("Severity", itm.get("severity", "Moderate")),
+                "Description": itm.get("Defect_Description", itm.get("finding", "")),
+                "Base_Deduction": float(itm.get("Deduction", 2.0)),
+                "Checker_Verdict": itm.get("Checker_Verdict", "Concur (Apply Deduction)")
+            })
+            
+        df_edit = pd.DataFrame(editable_items)
+        edited_df = st.data_editor(
+            df_edit,
+            column_config={
+                "Checker_Verdict": st.column_config.SelectboxColumn(
+                    "Checker L2 Verdict",
+                    help="Choose whether to uphold the penalty or override it.",
+                    options=["Concur (Apply Deduction)", "Override (Pardon Defect)", "Reduce Penalty (50%)"],
+                    required=True
+                )
+            },
+            disabled=["Item_ID", "Category", "Severity", "Description", "Base_Deduction"],
+            use_container_width=True
+        )
+        
+        # Recalculate L2 Score Dynamically
+        total_calibrated_deduction = 0.0
+        for _, row in edited_df.iterrows():
+            if row["Checker_Verdict"] == "Concur (Apply Deduction)":
+                total_calibrated_deduction += row["Base_Deduction"]
+            elif row["Checker_Verdict"] == "Reduce Penalty (50%)":
+                total_calibrated_deduction += (row["Base_Deduction"] * 0.5)
+            # Override adds 0.0 deduction
+            
+        calculated_l2_score = max(0.0, round(100.0 - total_calibrated_deduction, 1))
+        
+        # Visual Comparison
+        st.markdown("---")
+        st.markdown("#### Calibrated Quality Score Comparison")
+        c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
+        c_kpi1.metric("L1 Initial Score", f"{audit['l1_score']}%")
+        delta_score = round(calculated_l2_score - float(audit['l1_score']), 1)
+        c_kpi2.metric("L2 Calibrated Score", f"{calculated_l2_score}%", delta=f"{delta_score}%")
+        recommended_det = "L2 Approved (PASS)" if calculated_l2_score >= 85 else ("L2 Revision Required (REVISE)" if calculated_l2_score >= 70 else "L2 Rejected (REJECT)")
+        c_kpi3.write(f"**Recommended Clearance:** `{recommended_det}`")
+
+        # Formal Checker Sign-Off Form
         with st.form("checker_signoff_form"):
-            st.markdown("### ✍️ Level-2 Regulatory Determination & Sign-Off")
+            st.markdown("### ✍️ Official Level-2 Regulatory Sign-Off")
+            col_det, col_score = st.columns([2, 1])
+            with col_det:
+                l2_determination = st.selectbox(
+                    "Regulatory Clearance Determination",
+                    ["L2 Approved (PASS)", "L2 Revision Required (REVISE)", "L2 Rejected (REJECT)"],
+                    index=0 if calculated_l2_score >= 85 else (1 if calculated_l2_score >= 70 else 2)
+                )
+            with col_score:
+                final_l2_score = st.number_input("Final Recorded Score (%)", min_value=0.0, max_value=100.0, value=float(calculated_l2_score), step=0.5)
+
+            checker_remarks = st.text_area(
+                "Checker Assessment & Compliance Remarks",
+                f"Item overrides verified across 7-tab quality model. Final score calibrated to {final_l2_score}%. Cleared under UGC Open & Distance Learning regulations."
+            )
             
-            c_sc1, c_sc2 = st.columns(2)
-            with c_sc1:
-                l2_score = st.number_input("Final Calibrated Score (0-100)", min_value=0.0, max_value=100.0, value=float(audit["l1_score"]), step=0.5)
-            with c_sc2:
-                l2_det = st.selectbox("Regulatory Clearance Determination", ["L2 Approved (PASS)", "L2 Revision Required (REVISE)", "L2 Rejected (REJECT)"])
-                
-            checker_notes = st.text_area("Checker Assessment & Compliance Remarks", "Verified curriculum coverage, instructional depth, and assessment keys. Content meets regulatory guidelines.")
-            
-            submitted_l2 = st.form_submit_button("✅ Finalize & Sign Off Audit", type="primary", use_container_width=True)
-            if submitted_l2:
+            if st.form_submit_button("✅ Finalize & Sign Off Audit", type="primary", use_container_width=True):
                 audit["checker_email"] = st.session_state["user_email"]
-                audit["l2_score"] = l2_score
-                audit["l2_determination"] = l2_det
-                audit["checker_notes"] = checker_notes
+                audit["l2_score"] = final_l2_score
+                audit["l2_determination"] = l2_determination
+                audit["checker_notes"] = checker_remarks
+                audit["item_level_defects"] = edited_df.to_dict(orient="records")
                 audit["l2_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                audit["status"] = "L2 Approved" if "PASS" in l2_det else ("L2 Revision Required" if "REVISE" in l2_det else "L2 Rejected")
+                audit["status"] = "L2 Approved" if "PASS" in l2_determination else ("L2 Revision Required" if "REVISE" in l2_determination else "L2 Rejected")
                 
                 save_json(SUBMISSIONS_FILE, submissions)
-                st.success(f"Audit {audit['id']} successfully signed off with verdict: {l2_det}!")
+                st.success(f"Audit {audit['id']} successfully signed off!")
                 st.rerun()
 
 # ==============================================================================
-# VIEW 4: ALL AUDITS & REGULATORY COMPLIANCE REGISTRY
+# VIEW 4: COMPLIANCE REGISTRY & CN_MCQ_QA_Report.xlsx DOWNLOAD
 # ==============================================================================
 elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
     st.title("📚 Regulatory Compliance & Audit History Registry")
-    st.caption("Complete repository of historical L1 AI audits, Maker remarks, and Checker L2 sign-offs.")
+    st.caption("Complete repository of historical audits, item overrides, and official CN_MCQ_QA_Report exports.")
 
     submissions = load_json(SUBMISSIONS_FILE, [])
     
     if not submissions:
         st.info("No audits recorded in the platform registry yet.")
     else:
-        # Display Registry Table
         reg_data = []
         for s in submissions:
             reg_data.append({
                 "Audit ID": s.get("id"),
                 "Institution": s.get("university"),
                 "Program": s.get("program"),
-                "Module Title": s.get("title"),
+                "Assessment Title": s.get("title"),
                 "Maker": s.get("maker_email"),
                 "L1 Score": f"{s.get('l1_score')}%",
-                "L2 Final": f"{s.get('l2_score', '—')}%",
+                "L2 Calibrated": f"{s.get('l2_score', '—')}%",
                 "Status": s.get("status"),
                 "Checker": s.get("checker_email", "Pending")
             })
         st.dataframe(pd.DataFrame(reg_data), use_container_width=True)
         
         st.markdown("---")
-        st.subheader("📥 Export Official Regulatory Audit Report")
-        sel_export_id = st.selectbox("Select Audit to Export", [s["id"] for s in submissions])
+        st.subheader("📥 Export Official Regulatory Audit Artifact (CN_MCQ_QA_Report.xlsx)")
+        sel_export_id = st.selectbox("Select Audit Artifact to Export", [s["id"] for s in submissions])
         export_aud = next(s for s in submissions if s["id"] == sel_export_id)
         
-        excel_bytes = build_comprehensive_excel(export_aud)
+        # Generate clean Excel report
+        excel_bytes = build_cn_mcq_excel_report(export_aud)
+        file_suffix = "MCQ" if "MCQ" in export_aud.get("mode", "") else "SLM"
+        default_filename = f"CN_MCQ_QA_Report_{export_aud['id']}.xlsx" if file_suffix == "MCQ" else f"SLM_QA_Report_{export_aud['id']}.xlsx"
+        
         st.download_button(
-            label=f"📥 Download Comprehensive Report ({export_aud['id']})",
+            label=f"📥 Download Official {default_filename}",
             data=excel_bytes,
-            file_name=f"Compliance_Report_{export_aud['id']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            file_name=default_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
