@@ -9,3 +9,9 @@ fix_*.py
 inspect_*.py 
 repair_app.py 
 update_smtp_ssl.py 
+ 
+__pycache__/ 
+*.pyc 
+pending_otps.json 
+*.xlsx 
+*.pdf 
