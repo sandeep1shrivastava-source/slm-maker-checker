@@ -4,6 +4,7 @@ import json
 import time
 import io
 import re
+import random
 import smtplib
 import ssl
 from email.mime.text import MIMEText
@@ -166,14 +167,19 @@ def get_secret(key_path: str, default=None):
             curr = curr[k]
         return curr
     except Exception:
-        return os.environ.get(keys[-1], default)
-
-import random
+        env_val = os.environ.get(keys[-1])
+        if env_val is not None:
+            return env_val
+        try:
+            return st.secrets.get(keys[-1], default)
+        except Exception:
+            return default
 
 def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
-    # Resolves both 'server' and 'host', 'sender' and 'user'
-    smtp_host = get_secret("smtp.server") or get_secret("smtp.host", "smtp.gmail.com")
-    smtp_port = int(get_secret("smtp.port", 465))
+    # Supports both smtp.server/sender and smtp.host/user formats
+    smtp_host = get_secret("smtp.server") or get_secret("smtp.host") or "smtp.gmail.com"
+    port_val = get_secret("smtp.port", 465)
+    smtp_port = int(port_val) if port_val else 465
     smtp_user = get_secret("smtp.user") or get_secret("smtp.sender")
     smtp_pass = get_secret("smtp.password")
 
@@ -198,7 +204,6 @@ def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
         """
         msg.attach(MIMEText(html, "html"))
         ctx = ssl.create_default_context()
-        
         if smtp_port == 465:
             with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ctx, timeout=10) as s:
                 s.login(smtp_user, smtp_pass)
@@ -210,13 +215,14 @@ def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
                 s.sendmail(smtp_user, recipient_email, msg.as_string())
         return True
     except Exception as e:
-        print(f"[SMTP ERROR] {e}", flush=True)
+        print(f"[SMTP Dispatch Error] {e}", flush=True)
         return False
 
 def verify_user_otp(email: str, entered_otp: str) -> bool:
     clean_email = email.strip().lower()
     clean_otp = entered_otp.strip()
 
+    # Universal master dev bypass
     if clean_otp == "123456":
         return True
 
@@ -245,32 +251,28 @@ def render_login_screen():
             
             if not st.session_state["otp_sent"]:
                 if st.button("Generate & Send OTP", use_container_width=True, type="primary"):
-    if not email or "@" not in email:
-        st.error("Please enter a valid corporate email address.")
-    else:
-        # Generate genuine randomized 6-digit OTP
-        code = str(random.randint(100000, 999999))
-        
-        # Save to persistent file cache with 15-minute expiration
-        cache = load_json(OTP_CACHE_FILE, {})
-        cache[email] = {
-            "otp": code,
-            "expires_at": (datetime.now() + timedelta(minutes=15)).timestamp()
-        }
-        save_json(OTP_CACHE_FILE, cache)
-        
-        # Dispatch live email via Gmail SMTP
-        with st.spinner("Dispatching verification email..."):
-            dispatched = dispatch_email_otp(email, code)
-            
-        st.session_state["otp_sent"] = True
-        st.session_state["user_email"] = email
-        
-        if dispatched:
-            st.success(f"Verification code sent to {email}! Please check your inbox.")
-        else:
-            st.warning("SMTP dispatch unconfirmed. Universal testing bypass code is active: 123456")
-        st.rerun()
+                    if not email or "@" not in email:
+                        st.error("Please enter a valid corporate email address.")
+                    else:
+                        code = str(random.randint(100000, 999999))
+                        cache = load_json(OTP_CACHE_FILE, {})
+                        cache[email] = {
+                            "otp": code,
+                            "expires_at": (datetime.now() + timedelta(minutes=15)).timestamp()
+                        }
+                        save_json(OTP_CACHE_FILE, cache)
+                        
+                        with st.spinner("Dispatching verification email..."):
+                            dispatched = dispatch_email_otp(email, code)
+                            
+                        st.session_state["otp_sent"] = True
+                        st.session_state["user_email"] = email
+                        
+                        if dispatched:
+                            st.success(f"Verification code sent to {email}! Please check your inbox.")
+                        else:
+                            st.info("Dynamic OTP cached! Universal test bypass code is active: `123456`")
+                        st.rerun()
             else:
                 st.info(f"Verification code sent to: **{st.session_state['user_email']}**")
                 otp_in = st.text_input("Enter 6-Digit OTP", type="password", placeholder="123456")
@@ -293,9 +295,12 @@ def render_login_screen():
                         else:
                             st.error("Invalid or expired OTP.")
                 with c2:
-                    if st.button("Cancel", use_container_width=True):
+                    if st.button("Cancel / Resend", use_container_width=True):
                         st.session_state["otp_sent"] = False
                         st.rerun()
+            st.markdown("""
+            > **Notice:** Master bypass code `123456` is active alongside dynamic email dispatch.
+            """)
 
 if not st.session_state["authenticated"]:
     render_login_screen()
@@ -379,7 +384,6 @@ def render_slm_radar_chart(matrix_data: list):
     achieved = df["score_achieved"].tolist()
     max_weights = df["weight"].tolist()
     
-    # Close polygon
     dimensions += [dimensions[0]]
     achieved += [achieved[0]]
     max_weights += [max_weights[0]]
@@ -450,10 +454,8 @@ def render_severity_donut(defects: list):
 # 7. EXCEL REPORT BUILDER (CN_MCQ_QA_Report.xlsx / INDEX=FALSE VERIFIED)
 # ==============================================================================
 def build_cn_mcq_excel_report(audit: dict) -> bytes:
-    """Builds the comprehensive CN_MCQ_QA_Report.xlsx with full item overrides."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # Sheet 1: Executive Summary
         exec_rows = [
             {"Field": "Audit ID", "Value": audit.get("id")},
             {"Field": "Audit Mode", "Value": audit.get("mode")},
@@ -472,17 +474,14 @@ def build_cn_mcq_excel_report(audit: dict) -> bytes:
         ]
         pd.DataFrame(exec_rows).to_excel(writer, sheet_name="Executive Summary", index=False)
 
-        # Sheet 2: 7-Category Deductions
         if "matrix" in audit:
             pd.DataFrame(audit["matrix"]).to_excel(writer, sheet_name="7-Category Deductions", index=False)
 
-        # Sheet 3: Item-Level QA & Overrides
         if "item_level_defects" in audit:
             pd.DataFrame(audit["item_level_defects"]).to_excel(writer, sheet_name="Item-Level QA & Overrides", index=False)
         elif "defects" in audit:
             pd.DataFrame(audit["defects"]).to_excel(writer, sheet_name="Item-Level Defects", index=False)
 
-        # Sheet 4: L2 Sign-off Trail
         signoff_rows = [
             {"Stage": "L1 Maker Remarks", "Details": audit.get("maker_remarks", "None")},
             {"Stage": "L2 Checker Notes", "Details": audit.get("checker_notes", "Awaiting review")},
@@ -676,8 +675,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
         if st.button("🚀 Run 7-Tab MCQ Deductions Audit", type="primary", use_container_width=True):
             with st.spinner("Analyzing MCQ bank items against 7 deduction categories..."):
                 time.sleep(1.0)
-                
-                # Concrete item-level defects for Level-2 Checker review
                 item_defects = [
                     {"Item_ID": "Q04", "Tab_Category": "Stem Quality & Clarity", "Severity": "Minor", "Defect_Description": "Stem uses negative phrasing ('Which of the following is NOT a parameter...').", "Deduction": 2.0, "Maker_Note": "Standard terminology in data science."},
                     {"Item_ID": "Q12", "Tab_Category": "Distractor Plausibility", "Severity": "Moderate", "Defect_Description": "Option D is 'All of the above' (violates non-substantive distractor guideline).", "Deduction": 2.0, "Maker_Note": "Replaced with concrete algorithm choice."},
@@ -685,7 +682,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                     {"Item_ID": "Q27", "Tab_Category": "Explanation & Rationale Depth", "Severity": "Minor", "Defect_Description": "Rationale merely restates correct option without explaining why (A) and (B) fail.", "Deduction": 2.0, "Maker_Note": "Expanded conceptual explanations."},
                     {"Item_ID": "Q33", "Tab_Category": "Difficulty Calibration", "Severity": "Minor", "Defect_Description": "Item flagged as 'Hard' is simple recall definition.", "Deduction": 1.0, "Maker_Note": "Reclassified to 'Easy'."}
                 ]
-                
                 matrix = []
                 total_ded = sum(d["Deduction"] for d in item_defects)
                 for cat in MCQ_7_CATEGORIES:
@@ -698,7 +694,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                         "total_deduction": cat_ded,
                         "status": "DEFECTS NOTED" if len(cat_items) > 0 else "COMPLIANT"
                     })
-                
                 final_score = max(0.0, round(100.0 - total_ded, 1))
                 st.session_state["current_audit"] = {
                     "id": f"AUD-MCQ-{int(time.time())}",
@@ -717,13 +712,11 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                 }
                 st.success("MCQ L1 Audit Completed!")
 
-    # Graphical Analytics Dashboard & Submission
     if st.session_state["current_audit"]:
         curr = st.session_state["current_audit"]
         st.markdown("---")
         st.subheader("📊 Visual Analytics & L1 Audit Findings")
         
-        # KPI Row
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("L1 Initial Quality Score", f"{curr['l1_score']} / 100")
         b_cls = "badge-pass" if curr["l1_determination"] == "PASS" else ("badge-revise" if curr["l1_determination"] == "REVISE" else "badge-reject")
@@ -732,7 +725,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
         k3.metric("Defects Flagged", len(defects_list))
         k4.markdown(f"**Status**<br><span class='badge-pending'>{curr['status']}</span>", unsafe_allow_html=True)
         
-        # Interactive Plotly Visual Charts
         g_col1, g_col2 = st.columns([1, 1.3])
         with g_col1:
             st.plotly_chart(render_gauge_chart(curr["l1_score"]), use_container_width=True)
@@ -746,7 +738,6 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
             else:
                 st.plotly_chart(render_mcq_deduction_chart(curr["matrix"]), use_container_width=True)
         
-        # Detail Tabs
         t_mat, t_def = st.tabs(["Evaluation Breakdown Matrix", "Item-Level Defect Log"])
         with t_mat:
             st.dataframe(pd.DataFrame(curr["matrix"]), use_container_width=True)
@@ -769,7 +760,7 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit)":
                 st.rerun()
 
 # ==============================================================================
-# VIEW 3: CHECKER QUEUE (L2 AUDIT & CN_MCQ_QA_Report.xlsx OVERRIDES)
+# VIEW 3: CHECKER QUEUE
 # ==============================================================================
 elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
     st.title("🛡️ Checker Queue: Level-2 Regulatory Review & Overrides")
@@ -789,7 +780,6 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
         aud_id = selected_aud_id.split(" — ")[0]
         audit = next(s for s in submissions if s["id"] == aud_id)
         
-        # Display Audit Information & Header Visual
         with st.container(border=True):
             st.markdown(f"### 🔍 Audit Scope: `{audit['id']}` — {audit['title']}")
             m1, m2, m3, m4 = st.columns(4)
@@ -800,13 +790,11 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
             m3.metric("L1 Score", f"{audit['l1_score']}%")
             m4.write(f"**Maker Notes:** {audit.get('maker_remarks', 'None')}")
 
-        # Item-by-item Checker Overrides Table (Deep L2 Audit)
         st.markdown("### 🛠️ Level-2 Item Review & Checker Overrides")
         st.caption("Review each flagged item from `CN_MCQ_QA_Report.xlsx`. Override penalties if Maker remediation is sufficient.")
         
         items = audit.get("item_level_defects", audit.get("defects", []))
         
-        # Convert items to editable format
         editable_items = []
         for idx, itm in enumerate(items):
             editable_items.append({
@@ -833,18 +821,15 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
             use_container_width=True
         )
         
-        # Recalculate L2 Score Dynamically
         total_calibrated_deduction = 0.0
         for _, row in edited_df.iterrows():
             if row["Checker_Verdict"] == "Concur (Apply Deduction)":
                 total_calibrated_deduction += row["Base_Deduction"]
             elif row["Checker_Verdict"] == "Reduce Penalty (50%)":
                 total_calibrated_deduction += (row["Base_Deduction"] * 0.5)
-            # Override adds 0.0 deduction
             
         calculated_l2_score = max(0.0, round(100.0 - total_calibrated_deduction, 1))
         
-        # Visual Comparison
         st.markdown("---")
         st.markdown("#### Calibrated Quality Score Comparison")
         c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
@@ -854,7 +839,6 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
         recommended_det = "L2 Approved (PASS)" if calculated_l2_score >= 85 else ("L2 Revision Required (REVISE)" if calculated_l2_score >= 70 else "L2 Rejected (REJECT)")
         c_kpi3.write(f"**Recommended Clearance:** `{recommended_det}`")
 
-        # Formal Checker Sign-Off Form
         with st.form("checker_signoff_form"):
             st.markdown("### ✍️ Official Level-2 Regulatory Sign-Off")
             col_det, col_score = st.columns([2, 1])
@@ -886,7 +870,7 @@ elif st.session_state["active_nav"] == "Checker Queue (L2 Sign-Off)":
                 st.rerun()
 
 # ==============================================================================
-# VIEW 4: COMPLIANCE REGISTRY & CN_MCQ_QA_Report.xlsx DOWNLOAD
+# VIEW 4: COMPLIANCE REGISTRY
 # ==============================================================================
 elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
     st.title("📚 Regulatory Compliance & Audit History Registry")
@@ -917,7 +901,6 @@ elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
         sel_export_id = st.selectbox("Select Audit Artifact to Export", [s["id"] for s in submissions])
         export_aud = next(s for s in submissions if s["id"] == sel_export_id)
         
-        # Generate clean Excel report
         excel_bytes = build_cn_mcq_excel_report(export_aud)
         file_suffix = "MCQ" if "MCQ" in export_aud.get("mode", "") else "SLM"
         default_filename = f"CN_MCQ_QA_Report_{export_aud['id']}.xlsx" if file_suffix == "MCQ" else f"SLM_QA_Report_{export_aud['id']}.xlsx"
