@@ -737,4 +737,4 @@ def generate_excel_report(audit_df, defect_df, mcq_data, meta, artifact_type):
         elif artifact_type == "MCQ Question Bank" and mcq_data:
             for sheet_name, df in mcq_data.items():
                 if not df.empty:
-                    df.to_excel(writer, sheet_name=sheet_name, index=
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
