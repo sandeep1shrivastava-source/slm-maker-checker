@@ -168,10 +168,13 @@ def get_secret(key_path: str, default=None):
     except Exception:
         return os.environ.get(keys[-1], default)
 
+import random
+
 def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
-    smtp_host = get_secret("smtp.host", "smtp.gmail.com")
+    # Resolves both 'server' and 'host', 'sender' and 'user'
+    smtp_host = get_secret("smtp.server") or get_secret("smtp.host", "smtp.gmail.com")
     smtp_port = int(get_secret("smtp.port", 465))
-    smtp_user = get_secret("smtp.user")
+    smtp_user = get_secret("smtp.user") or get_secret("smtp.sender")
     smtp_pass = get_secret("smtp.password")
 
     if not smtp_user or not smtp_pass:
@@ -179,33 +182,35 @@ def dispatch_email_otp(recipient_email: str, otp_code: str) -> bool:
 
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = f"🔑 QA Verification Code: {otp_code}"
+        msg["Subject"] = f"🔑 Your QA Platform Verification Code: {otp_code}"
         msg["From"] = f"Academic QA Engine <{smtp_user}>"
         msg["To"] = recipient_email
 
         html = f"""
-        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #e2e8f0; border-radius: 8px;">
-            <h2 style="color: #1e3a8a;">Academic QA Platform</h2>
-            <p>Your one-time sign-in code is:</p>
-            <div style="font-size: 28px; font-weight: bold; letter-spacing: 4px; padding: 12px; background: #f1f5f9; text-align: center;">
+        <div style="font-family: Arial, sans-serif; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px; max-width: 500px; margin: auto;">
+            <h2 style="color: #1e3a8a; margin-top: 0;">Academic QA Platform</h2>
+            <p>Your one-time sign-in verification code is:</p>
+            <div style="font-size: 32px; font-weight: bold; letter-spacing: 6px; padding: 14px; background: #f1f5f9; text-align: center; color: #0f172a; border-radius: 6px;">
                 {otp_code}
             </div>
-            <p style="color: #64748b; font-size: 12px;">Valid for 15 minutes. Use code 123456 for testing bypass.</p>
+            <p style="color: #64748b; font-size: 13px; margin-top: 20px;">This code expires in 15 minutes. If you did not request this code, please ignore this email.</p>
         </div>
         """
         msg.attach(MIMEText(html, "html"))
         ctx = ssl.create_default_context()
+        
         if smtp_port == 465:
-            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ctx, timeout=5) as s:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, context=ctx, timeout=10) as s:
                 s.login(smtp_user, smtp_pass)
                 s.sendmail(smtp_user, recipient_email, msg.as_string())
         else:
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=5) as s:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as s:
                 s.starttls(context=ctx)
                 s.login(smtp_user, smtp_pass)
                 s.sendmail(smtp_user, recipient_email, msg.as_string())
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[SMTP ERROR] {e}", flush=True)
         return False
 
 def verify_user_otp(email: str, entered_otp: str) -> bool:
@@ -240,24 +245,32 @@ def render_login_screen():
             
             if not st.session_state["otp_sent"]:
                 if st.button("Generate & Send OTP", use_container_width=True, type="primary"):
-                    if not email or "@" not in email:
-                        st.error("Please enter a valid corporate email address.")
-                    else:
-                        code = "123456"
-                        cache = load_json(OTP_CACHE_FILE, {})
-                        cache[email] = {
-                            "otp": code,
-                            "expires_at": (datetime.now() + timedelta(minutes=15)).timestamp()
-                        }
-                        save_json(OTP_CACHE_FILE, cache)
-                        dispatched = dispatch_email_otp(email, code)
-                        st.session_state["otp_sent"] = True
-                        st.session_state["user_email"] = email
-                        if dispatched:
-                            st.success(f"OTP successfully sent to {email}")
-                        else:
-                            st.info("Dynamic OTP cached! Universal Dev Bypass: `123456`")
-                        st.rerun()
+    if not email or "@" not in email:
+        st.error("Please enter a valid corporate email address.")
+    else:
+        # Generate genuine randomized 6-digit OTP
+        code = str(random.randint(100000, 999999))
+        
+        # Save to persistent file cache with 15-minute expiration
+        cache = load_json(OTP_CACHE_FILE, {})
+        cache[email] = {
+            "otp": code,
+            "expires_at": (datetime.now() + timedelta(minutes=15)).timestamp()
+        }
+        save_json(OTP_CACHE_FILE, cache)
+        
+        # Dispatch live email via Gmail SMTP
+        with st.spinner("Dispatching verification email..."):
+            dispatched = dispatch_email_otp(email, code)
+            
+        st.session_state["otp_sent"] = True
+        st.session_state["user_email"] = email
+        
+        if dispatched:
+            st.success(f"Verification code sent to {email}! Please check your inbox.")
+        else:
+            st.warning("SMTP dispatch unconfirmed. Universal testing bypass code is active: 123456")
+        st.rerun()
             else:
                 st.info(f"Verification code sent to: **{st.session_state['user_email']}**")
                 otp_in = st.text_input("Enter 6-Digit OTP", type="password", placeholder="123456")
