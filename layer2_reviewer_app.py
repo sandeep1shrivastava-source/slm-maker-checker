@@ -2,31 +2,16 @@
 Academic QA Platform (SLM & MCQ Maker-Checker Platform) — Layer-2 True Superset
 File: layer2_reviewer_app.py
 Branch: dev/layer-2
-Release: v2.0.0-layer2-superset (100% Superset of v1.1.0-layer1-complete)
+Release: v2.1.0-layer2-superset (100% Superset of v1.1.0-layer1-complete)
 
-Preserved Layer-1 Foundation:
-- Multi-Role RBAC (Admin, Maker, Checker) with Gmail TLS OTP (SSL 465 / STARTTLS 587),
-  persistent JSON OTP cache (data/pending_otps.json), and 123456 dev bypass.
-- Institutional Catalog & User Management (Add University, Add Program/Cohorts, Assign Roles).
-- Academic Hierarchy Dropdowns (University -> Program -> Semester/Cohort) across Maker & Checker views.
-- Hybrid Syllabus Scoping (Paste Chapter Scope OR Upload Document) + Raw Manuscript Paste OR File Upload.
-- Weighted 12-Parameter UGC SLM Matrix (100% total weight) & 7-Category MCQ Deduction Model.
-- Interactive Checker Item Verdict Editor: 'Concur (Apply Deduction)', 'Override (Pardon Defect)', 'Reduce Penalty (50%)'.
-- Dual-Track Checker Workflows: Track A (Review Forwarded Audits Queue) & Track B (Independent Direct QA).
-
-Added Layer-2 Capabilities:
-- Scope Mode Switcher in Maker & Checker Workspaces: 'Single Unit / File (Layer-1)' OR 'Multi-Chapter Batch 1-to-N (Layer-2)'.
-- Auto Chapter Sequence Detection & Editable Sequence Table (st.data_editor) before batch execution.
-- Disaggregated Automated_Score (Pre-Score) vs. Audited_Score (Checker Calibrated Score) + Variance tracking.
-- UGC & SWAYAM Quadrant-II Regulatory Engine:
-  * 4-Tier Plagiarism Levels (Level 0 <=10%, Level 1 10.1-40%, Level 2 40.1-60%, Level 3 >60%).
-  * UGC Exclusion Filter (excludes References/Bibliography, quoted text, & coincidental phrases <=14 words).
-  * Zero-Tolerance Core Section Check (Summaries, Objectives, Pedagogical Alignment).
-  * AI-Generated Content Screening (<=20% cap) & Faculty AI Disclosure verification.
-  * Copyright & Media Clearance Tags (In-House, Creative Commons, Written Permission, NDLI Open Links).
-  * Hard Pre-Publish Regulatory Gating on Checker Sign-Off (blocks PASS if Similarity or AI exceeds cap unless exempted).
-- Customizable QA Percentage Rules (Pass, Minor Correction, Major Correction with Revision, Rejected) persisted in JSON.
-- Multi-Sheet Excel Workbook (index=False guaranteed) + Print/PDF-Ready Regulatory Dossier (.html).
+Enhancements in v2.1.0:
+- Granular File & Dossier Cleanup:
+  * Remove uploaded files one-by-one (via exclusion selector) or Clear All uploaded files & reset form.
+  * Remove individual chapters one-by-one from an active multi-chapter dossier with auto score recalculation.
+  * Delete saved dossiers one-by-one or Clear All stored dossiers in Checker Queue & Compliance Registry.
+- Preserves 100% of Layer-1 (RBAC, Gmail TLS OTP + 123456 bypass, Catalog/User Admin, Single-Unit &
+  1-to-N Batch Auditing, Concur/Pardon/50% Item Overrides) + Layer-2 (UGC Quadrant-II Gating,
+  Custom Percentage Rules, Disaggregated Pre/Final Scores, Multi-Sheet Excel & Print HTML Dossiers).
 """
 
 import os
@@ -74,7 +59,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v2.0.0-layer2-superset"
+APP_VERSION = "v2.1.0-layer2-superset"
 
 st.markdown("""
 <style>
@@ -210,7 +195,7 @@ def save_json(filepath: Path, data):
 
 
 # ==============================================================================
-# 3. SESSION STATE & DYNAMIC PERCENTAGE POLICY ENGINE (LAYER-2 ADD-ON)
+# 3. SESSION STATE & DYNAMIC PERCENTAGE POLICY ENGINE
 # ==============================================================================
 SESSION_DEFAULTS = {
     "authenticated": False,
@@ -219,7 +204,11 @@ SESSION_DEFAULTS = {
     "otp_sent": False,
     "active_nav": "Maker Workspace (L1 Audit & Forwarding)",
     "maker_audit": None,
-    "checker_independent_audit": None
+    "checker_independent_audit": None,
+    "m_upload_nonce": 0,
+    "chk_upload_nonce": 0,
+    "m_excluded_files": [],
+    "chk_excluded_files": []
 }
 
 for key, val in SESSION_DEFAULTS.items():
@@ -286,6 +275,35 @@ def render_threshold_sidebar() -> dict:
                 st.rerun()
 
     return load_thresholds()
+
+
+def remove_chapter_from_audit(audit: dict, chapter_num_to_remove: int, cfg: dict, is_checker_direct: bool = False):
+    """Removes a single chapter from a multi-chapter dossier and recalculates composite rollups."""
+    remaining_chapters = [c for c in audit.get("chapters", []) if int(c["chapter_num"]) != int(chapter_num_to_remove)]
+    if not remaining_chapters:
+        return None
+
+    audit["chapters"] = remaining_chapters
+    audit["matrix"] = [m for m in audit.get("matrix", []) if int(m.get("Chapter_Number", -1)) != int(chapter_num_to_remove)]
+    prefix_tag = f"CH{int(chapter_num_to_remove):02d}"
+    audit["defects"] = [d for d in audit.get("defects", []) if prefix_tag not in str(d.get("Item_ID", ""))]
+    audit["item_level_defects"] = [d for d in audit.get("item_level_defects", []) if prefix_tag not in str(d.get("Item_ID", ""))]
+
+    avg_auto = round(float(np.mean([c["automated_score"] for c in remaining_chapters])), 1)
+    avg_aud = round(float(np.mean([c["score"] for c in remaining_chapters])), 1)
+    avg_sim = round(float(np.mean([c["similarity_index"] for c in remaining_chapters])), 1)
+    avg_ai = round(float(np.mean([c["ai_index"] for c in remaining_chapters])), 1)
+
+    audit["scope_type"] = f"Multi-Chapter Batch ({len(remaining_chapters)} Chapters)"
+    audit["l1_automated_score"] = avg_auto
+    audit["l1_score"] = avg_aud
+    audit["l1_determination"] = classify_quality_score(avg_aud, cfg)
+    audit["similarity_index"] = avg_sim
+    audit["ai_index"] = avg_ai
+    if is_checker_direct:
+        audit["l2_score"] = avg_aud
+        audit["l2_determination"] = classify_quality_score(avg_aud, cfg)
+    return audit
 
 
 # ==============================================================================
@@ -531,7 +549,6 @@ def parse_chapter_sequence(filenames: list) -> list:
 
 
 def filter_ugc_exclusions(raw_text: str) -> str:
-    """Excludes References/Bibliography, quoted text, and standard boilerplate per UGC 2018 rules."""
     cleaned = re.split(
         r'(?i)\n\s*(?:references|bibliography|further reading|suggested readings|acknowledgments)\b',
         raw_text
@@ -541,7 +558,6 @@ def filter_ugc_exclusions(raw_text: str) -> str:
 
 
 def get_15_word_shingles(words: list) -> set:
-    """Generates 15-word shingles so coincidental phrases up to 14 words are excluded per UGC norms."""
     if len(words) < 15:
         return set()
     return {" ".join(words[i:i + 15]) for i in range(len(words) - 14)}
@@ -591,7 +607,7 @@ def calculate_ugc_similarity_and_ai(text_content: str, all_chapter_texts: dict, 
 
 
 # ==============================================================================
-# 7. PLOTLY VISUAL ANALYTICS ENGINE (LAYER-1 + LAYER-2 CHARTS)
+# 7. PLOTLY VISUAL ANALYTICS ENGINE
 # ==============================================================================
 def render_gauge_chart(score: float, cfg: dict, title: str = "Overall Compliance Score"):
     fig = go.Figure(go.Indicator(
@@ -645,9 +661,12 @@ def render_cap_gauge_chart(value: float, title: str, max_val: float, cap_val: fl
 
 def render_slm_radar_chart(matrix_data: list):
     df = pd.DataFrame(matrix_data)
-    dimensions = df["dimension"].tolist()
-    achieved = df["score_achieved"].tolist()
-    max_weights = df["weight"].tolist()
+    if df.empty:
+        return go.Figure()
+    grouped = df.groupby("dimension", sort=False)[["weight", "score_achieved"]].mean().reset_index()
+    dimensions = grouped["dimension"].tolist()
+    achieved = grouped["score_achieved"].tolist()
+    max_weights = grouped["weight"].tolist()
 
     dimensions += [dimensions[0]]
     achieved += [achieved[0]]
@@ -682,8 +701,11 @@ def render_slm_radar_chart(matrix_data: list):
 
 def render_mcq_deduction_chart(matrix_data: list):
     df = pd.DataFrame(matrix_data)
+    if df.empty:
+        return go.Figure()
+    grouped = df.groupby("dimension", as_index=False)["total_deduction"].sum()
     fig = px.bar(
-        df,
+        grouped,
         x="total_deduction",
         y="dimension",
         orientation='h',
@@ -746,7 +768,7 @@ def render_chapter_comparison_bar(chapters: list, cfg: dict):
 
 
 # ==============================================================================
-# 8. EVALUATION ENGINES (LAYER-1 SINGLE-UNIT + LAYER-2 MULTI-CHAPTER BATCH)
+# 8. EVALUATION ENGINES
 # ==============================================================================
 def evaluate_slm_content(manuscript_text: str, syllabus_scope: str, cfg: dict, chapter_num: int = 1, chapter_title: str = "Unit 1", source_file: str = "Direct Input", all_texts: dict = None):
     sim_idx, ugc_lvl, ai_idx, ai_status = calculate_ugc_similarity_and_ai(
@@ -784,7 +806,6 @@ def evaluate_slm_content(manuscript_text: str, syllabus_scope: str, cfg: dict, c
             findings = f"Meets standard UGC guidelines for {dim}."
             remedy = "No critical defects detected."
 
-        # Disaggregated Audited Score (calibrated baseline)
         audited_ach = auto_ach
         pct_score = round((audited_ach / weight) * 100, 1)
         status = "COMPLIANT" if pct_score >= cfg["pass_min"] else ("NEEDS REVISION" if pct_score >= cfg["major_min"] else "NON-COMPLIANT")
@@ -1046,7 +1067,7 @@ def build_printable_html_dossier(audit: dict, cfg: dict) -> bytes:
 
 
 # ==============================================================================
-# VIEW 1: ADMIN CONTROL PANEL (LAYER-1 CATALOG & ROLES + LAYER-2 POLICY TAB)
+# VIEW 1: ADMIN CONTROL PANEL
 # ==============================================================================
 if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
     st.title("🏛️ Institutional Catalog & Role Administration")
@@ -1131,9 +1152,19 @@ if st.session_state["active_nav"] == "Institutional Catalog & Users (Admin)":
 # VIEW 2: MAKER WORKSPACE (SINGLE-UNIT LAYER-1 + 1-TO-N BATCH LAYER-2)
 # ==============================================================================
 elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)":
-    st.title("✍️ Maker Workspace: L1 Audit & Forwarding")
-    st.caption("Run Single-Unit (Layer-1) or Multi-Chapter 1-to-N Batch (Layer-2) audits and forward to the Checker Queue.")
+    hdr_c1, hdr_c2 = st.columns([3.5, 1])
+    with hdr_c1:
+        st.title("✍️ Maker Workspace: L1 Audit & Forwarding")
+        st.caption("Run Single-Unit (Layer-1) or Multi-Chapter 1-to-N Batch (Layer-2) audits and forward to the Checker Queue.")
+    with hdr_c2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🧹 Clear All Files & Reset", use_container_width=True, key="m_clear_all_btn"):
+            st.session_state["m_upload_nonce"] += 1
+            st.session_state["m_excluded_files"] = []
+            st.session_state["maker_audit"] = None
+            st.rerun()
 
+    m_nonce = st.session_state["m_upload_nonce"]
     catalog = load_json(CATALOG_FILE, DEFAULT_CATALOG)
     roles = load_json(ROLES_FILE, DEFAULT_ROLES)
     checkers_list = [k for k, v in roles.items() if v in ["Checker", "Admin"]] or ["checker@upgrad.com"]
@@ -1158,7 +1189,7 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
         with col_m2:
             scope_mode = st.radio("Ingestion Scope", ["Single Unit / File (Layer-1)", "Multi-Chapter Batch 1-to-N (Layer-2)"], horizontal=True, key="maker_scope_mode")
 
-        module_title = st.text_input("Course / Module / Assessment Title", "Applied Data Science: Optimization Models", key="maker_title")
+        module_title = st.text_input("Course / Module / Assessment Title", "Applied Data Science: Optimization Models", key=f"maker_title_{m_nonce}")
 
     # --- PATH A: LAYER-1 SINGLE UNIT / FILE ---
     if scope_mode == "Single Unit / File (Layer-1)":
@@ -1168,14 +1199,14 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
                 st.markdown("#### 2. Scoped Syllabus (Hybrid)")
                 syl_mode = st.radio("Syllabus Input", ["Paste Chapter Scope", "Upload Document"], horizontal=True, key="m_syl_mode")
                 if syl_mode == "Paste Chapter Scope":
-                    syl_input = st.text_area("Paste Scoped Unit Learning Outcomes", height=180, placeholder="Unit 1: Linear Optimization...", key="m_syl_text")
+                    syl_input = st.text_area("Paste Scoped Unit Learning Outcomes", height=180, placeholder="Unit 1: Linear Optimization...", key=f"m_syl_text_{m_nonce}")
                 else:
-                    up_syl = st.file_uploader("Upload Course Syllabus File", type=["pdf", "docx", "txt"], key="m_syl_file")
+                    up_syl = st.file_uploader("Upload Course Syllabus File", type=["pdf", "docx", "txt"], key=f"m_syl_file_{m_nonce}")
                     syl_input = extract_text_from_file(up_syl) if up_syl else ""
             with c_manu:
                 st.markdown("#### 3. SLM Manuscript")
-                manu_file = st.file_uploader("Upload Manuscript File", type=["pdf", "docx", "txt"], key="m_manu_file")
-                manu_text = st.text_area("Or Paste Raw Manuscript Text", height=180, placeholder="Chapter 1 content text...", key="m_manu_text")
+                manu_file = st.file_uploader("Upload Manuscript File", type=["pdf", "docx", "txt"], key=f"m_manu_file_{m_nonce}")
+                manu_text = st.text_area("Or Paste Raw Manuscript Text", height=180, placeholder="Chapter 1 content text...", key=f"m_manu_text_{m_nonce}")
 
             if st.button("🚀 Run L1 AI Regulatory Audit", type="primary", use_container_width=True, key="m_run_slm"):
                 combined_manu = (extract_text_from_file(manu_file) + "\n" + manu_text).strip()
@@ -1183,7 +1214,7 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
                     st.error("Please provide manuscript text or upload a file.")
                 else:
                     with st.spinner("Analyzing against 12 UGC matrix dimensions & Quadrant-II rules..."):
-                        time.sleep(0.6)
+                        time.sleep(0.4)
                         res = evaluate_slm_content(
                             combined_manu, syl_input, active_cfg, chapter_num=1,
                             chapter_title=module_title, source_file=manu_file.name if manu_file else "Pasted Manuscript"
@@ -1214,10 +1245,10 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
                         st.success("L1 AI Audit successfully computed!")
         else:
             st.markdown("#### 2. MCQ Bank Upload")
-            mcq_file = st.file_uploader("Upload Question Bank Spreadsheet (.xlsx or .csv)", type=["xlsx", "csv"], key="m_mcq_file")
+            mcq_file = st.file_uploader("Upload Question Bank Spreadsheet (.xlsx or .csv)", type=["xlsx", "csv"], key=f"m_mcq_file_{m_nonce}")
             if st.button("🚀 Run 7-Tab MCQ Deductions Audit", type="primary", use_container_width=True, key="m_run_mcq"):
                 with st.spinner("Analyzing questions against 7-tab deduction model..."):
-                    time.sleep(0.6)
+                    time.sleep(0.4)
                     res = evaluate_mcq_content(mcq_file, active_cfg, chapter_num=1, chapter_title=module_title)
                     st.session_state["maker_audit"] = {
                         "id": f"AUD-MCQ-{int(time.time())}",
@@ -1248,28 +1279,48 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
         st.markdown("#### 2. Hybrid Syllabus Scope & 1-to-N Multi-Chapter Upload")
         b_c1, b_c2 = st.columns(2)
         with b_c1:
-            batch_syl_file = st.file_uploader("Upload Master Course Syllabus (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"], key="m_batch_syl_file")
+            batch_syl_file = st.file_uploader("Upload Master Course Syllabus (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"], key=f"m_batch_syl_file_{m_nonce}")
         with b_c2:
-            batch_lo_text = st.text_area("Paste Chapter-Scope Learning Objectives (Optional)", height=100, key="m_batch_lo_text")
+            batch_lo_text = st.text_area("Paste Chapter-Scope Learning Objectives (Optional)", height=100, key=f"m_batch_lo_text_{m_nonce}")
 
         ai_decl = st.checkbox("Faculty AI & Originality Declaration: AI usage disclosed & media cleared per UGC Quadrant-II.", value=True, key="m_batch_ai_decl")
 
-        batch_files = st.file_uploader(
+        raw_batch_files = st.file_uploader(
             "Upload All Chapter Files at Once (PDF, DOCX, TXT, XLSX, CSV)",
             type=["pdf", "docx", "txt", "xlsx", "csv"],
             accept_multiple_files=True,
-            key="m_batch_files"
+            key=f"m_batch_files_{m_nonce}"
         )
-        edited_seq = None
-        if batch_files:
-            st.markdown("**Review & Customize Chapter Execution Sequence:**")
-            seq_df = pd.DataFrame(parse_chapter_sequence([f.name for f in batch_files]))
-            edited_seq = st.data_editor(seq_df, use_container_width=True, disabled=["Filename"], key="m_batch_seq_editor")
 
-        if batch_files and edited_seq is not None and st.button("🚀 Execute 1-to-N Multi-Chapter Batch Audit", type="primary", use_container_width=True, key="m_run_batch"):
+        # Filter out files removed one-by-one
+        active_batch_files = [f for f in (raw_batch_files or []) if f.name not in st.session_state["m_excluded_files"]]
+        edited_seq = None
+
+        if active_batch_files:
+            rm_c1, rm_c2, rm_c3 = st.columns([2.5, 1, 1])
+            with rm_c1:
+                file_to_remove = st.selectbox("Remove Individual Uploaded File (One-by-One)", [f.name for f in active_batch_files], key="m_rm_file_sel")
+            with rm_c2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🗑️ Remove File", use_container_width=True, key="m_rm_file_btn"):
+                    st.session_state["m_excluded_files"].append(file_to_remove)
+                    st.rerun()
+            with rm_c3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🧹 Clear All Files", use_container_width=True, key="m_clr_files_btn"):
+                    st.session_state["m_upload_nonce"] += 1
+                    st.session_state["m_excluded_files"] = []
+                    st.rerun()
+
+            st.markdown(f"**Review & Customize Chapter Execution Sequence ({len(active_batch_files)} Active Files):**")
+            seq_df = pd.DataFrame(parse_chapter_sequence([f.name for f in active_batch_files]))
+            seq_hash = abs(hash(tuple(f.name for f in active_batch_files)))
+            edited_seq = st.data_editor(seq_df, use_container_width=True, disabled=["Filename"], key=f"m_batch_seq_{m_nonce}_{seq_hash}")
+
+        if active_batch_files and edited_seq is not None and st.button("🚀 Execute 1-to-N Multi-Chapter Batch Audit", type="primary", use_container_width=True, key="m_run_batch"):
             full_syl = (extract_text_from_file(batch_syl_file) + "\n" + batch_lo_text).strip()
             ordered_rows = edited_seq.sort_values(by="Chapter_Number").to_dict("records")
-            file_map = {f.name: f for f in batch_files}
+            file_map = {f.name: f for f in active_batch_files}
             all_texts = {
                 r["Filename"]: (r["Filename"] if r["Filename"].lower().endswith((".xlsx", ".csv")) else extract_text_from_file(file_map[r["Filename"]]))
                 for r in ordered_rows
@@ -1338,7 +1389,13 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
     if st.session_state["maker_audit"]:
         curr = st.session_state["maker_audit"]
         st.markdown("---")
-        st.subheader(f"📊 L1 Visual Analytics & Maker Forwarding Queue — `{curr['id']}`")
+        d_hdr1, d_hdr2 = st.columns([3.5, 1])
+        with d_hdr1:
+            st.subheader(f"📊 L1 Visual Analytics & Maker Forwarding Queue — `{curr['id']}`")
+        with d_hdr2:
+            if st.button("🗑️ Clear Active Dossier", use_container_width=True, key="m_clear_dossier_btn"):
+                st.session_state["maker_audit"] = None
+                st.rerun()
 
         k1, k2, k3, k4, k5 = st.columns(5)
         k1.metric("Automated Pre-Score", f"{curr.get('l1_automated_score', curr['l1_score'])}%")
@@ -1378,6 +1435,16 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
         if "chapters" in curr and curr["chapters"]:
             with rendered_tabs[tab_idx]:
                 st.dataframe(pd.DataFrame(curr["chapters"]), use_container_width=True)
+                rc1, rc2 = st.columns([3, 1])
+                with rc1:
+                    ch_opts = {f"Ch {c['chapter_num']}: {c['chapter_name']}": c["chapter_num"] for c in curr["chapters"]}
+                    sel_ch_rm = st.selectbox("Select Chapter to Remove One-by-One from Dossier", list(ch_opts.keys()), key="m_ch_rm_sel")
+                with rc2:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("🗑️ Remove Chapter", use_container_width=True, key="m_ch_rm_btn"):
+                        updated = remove_chapter_from_audit(curr, ch_opts[sel_ch_rm], active_cfg, is_checker_direct=False)
+                        st.session_state["maker_audit"] = updated
+                        st.rerun()
             tab_idx += 1
         with rendered_tabs[tab_idx]:
             st.dataframe(pd.DataFrame(curr["matrix"]), use_container_width=True)
@@ -1410,9 +1477,19 @@ elif st.session_state["active_nav"] == "Maker Workspace (L1 Audit & Forwarding)"
 # VIEW 3: INDEPENDENT CHECKER WORKSPACE (SINGLE-UNIT + 1-TO-N BATCH DIRECT QA)
 # ==============================================================================
 elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA)":
-    st.title("🛡️ Independent Checker Workspace: Direct Regulatory QA")
-    st.caption("Execute standalone Single-Unit or 1-to-N Multi-Chapter audits directly with full override & sign-off authority.")
+    ch_hdr1, ch_hdr2 = st.columns([3.5, 1])
+    with ch_hdr1:
+        st.title("🛡️ Independent Checker Workspace: Direct Regulatory QA")
+        st.caption("Execute standalone Single-Unit or 1-to-N Multi-Chapter audits directly with full override & sign-off authority.")
+    with ch_hdr2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🧹 Clear All Files & Reset", use_container_width=True, key="chk_clear_all_btn"):
+            st.session_state["chk_upload_nonce"] += 1
+            st.session_state["chk_excluded_files"] = []
+            st.session_state["checker_independent_audit"] = None
+            st.rerun()
 
+    chk_nonce = st.session_state["chk_upload_nonce"]
     catalog = load_json(CATALOG_FILE, DEFAULT_CATALOG)
 
     with st.container(border=True):
@@ -1435,18 +1512,18 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
         with cm2:
             c_scope_mode = st.radio("Ingestion Scope", ["Single Unit / File (Layer-1)", "Multi-Chapter Batch 1-to-N (Layer-2)"], horizontal=True, key="chk_scope_mode")
 
-        c_title = st.text_input("Module / Course Title", "Direct Regulatory Audit: Financial Derivatives", key="chk_title")
+        c_title = st.text_input("Module / Course Title", "Direct Regulatory Audit: Financial Derivatives", key=f"chk_title_{chk_nonce}")
 
     if c_scope_mode == "Single Unit / File (Layer-1)":
         if c_mode == "SLM Theory (12 UGC Parameters)":
             c_syl, c_manu = st.columns(2)
             with c_syl:
                 st.markdown("#### 2. Syllabus Mapping Scope")
-                chk_syl_text = st.text_area("Paste Unit Learning Outcomes", height=180, placeholder="Unit Scope...", key="chk_syl_text")
+                chk_syl_text = st.text_area("Paste Unit Learning Outcomes", height=180, placeholder="Unit Scope...", key=f"chk_syl_text_{chk_nonce}")
             with c_manu:
                 st.markdown("#### 3. SLM Manuscript")
-                chk_manu_file = st.file_uploader("Upload Manuscript File", type=["pdf", "docx", "txt"], key="chk_manu_file")
-                chk_manu_text = st.text_area("Or Paste Raw Manuscript", height=180, placeholder="Manuscript content...", key="chk_manu_text")
+                chk_manu_file = st.file_uploader("Upload Manuscript File", type=["pdf", "docx", "txt"], key=f"chk_manu_file_{chk_nonce}")
+                chk_manu_text = st.text_area("Or Paste Raw Manuscript", height=180, placeholder="Manuscript content...", key=f"chk_manu_text_{chk_nonce}")
 
             if st.button("🚀 Run Independent Checker Audit", type="primary", use_container_width=True, key="chk_run_slm"):
                 combined_chk = (extract_text_from_file(chk_manu_file) + "\n" + chk_manu_text).strip()
@@ -1480,7 +1557,7 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
                     st.success("Independent audit completed!")
         else:
             st.markdown("#### 2. Direct MCQ Bank Upload")
-            chk_mcq_file = st.file_uploader("Upload MCQ Spreadsheet (.xlsx or .csv)", type=["xlsx", "csv"], key="chk_mcq_file")
+            chk_mcq_file = st.file_uploader("Upload MCQ Spreadsheet (.xlsx or .csv)", type=["xlsx", "csv"], key=f"chk_mcq_file_{chk_nonce}")
             if st.button("🚀 Run Independent MCQ Audit", type="primary", use_container_width=True, key="chk_run_mcq"):
                 res = evaluate_mcq_content(chk_mcq_file, active_cfg, chapter_num=1, chapter_title=c_title)
                 st.session_state["checker_independent_audit"] = {
@@ -1510,19 +1587,49 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
         st.markdown("#### 2. Master Syllabus & 1-to-N Multi-Chapter Upload")
         cb1, cb2 = st.columns(2)
         with cb1:
-            chk_b_syl = st.file_uploader("Upload Master Syllabus (Optional)", type=["pdf", "docx", "txt"], key="chk_b_syl")
+            chk_b_syl = st.file_uploader("Upload Master Syllabus (Optional)", type=["pdf", "docx", "txt"], key=f"chk_b_syl_{chk_nonce}")
         with cb2:
-            chk_b_lo = st.text_area("Paste Unit Learning Objectives (Optional)", height=100, key="chk_b_lo")
+            chk_b_lo = st.text_area("Paste Unit Learning Objectives (Optional)", height=100, key=f"chk_b_lo_{chk_nonce}")
 
-        chk_b_files = st.file_uploader("Upload All Chapter Files at Once", type=["pdf", "docx", "txt", "xlsx", "csv"], accept_multiple_files=True, key="chk_b_files")
+        raw_chk_b_files = st.file_uploader(
+            "Upload All Chapter Files at Once",
+            type=["pdf", "docx", "txt", "xlsx", "csv"],
+            accept_multiple_files=True,
+            key=f"chk_b_files_{chk_nonce}"
+        )
+
+        active_chk_files = [f for f in (raw_chk_b_files or []) if f.name not in st.session_state["chk_excluded_files"]]
         chk_edited_seq = None
-        if chk_b_files:
-            chk_edited_seq = st.data_editor(pd.DataFrame(parse_chapter_sequence([f.name for f in chk_b_files])), use_container_width=True, disabled=["Filename"], key="chk_seq_ed")
 
-        if chk_b_files and chk_edited_seq is not None and st.button("🚀 Run Independent 1-to-N Batch Audit", type="primary", use_container_width=True, key="chk_run_batch"):
+        if active_chk_files:
+            crm1, crm2, crm3 = st.columns([2.5, 1, 1])
+            with crm1:
+                chk_file_rm = st.selectbox("Remove Individual Uploaded File (One-by-One)", [f.name for f in active_chk_files], key="chk_rm_file_sel")
+            with crm2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🗑️ Remove File", use_container_width=True, key="chk_rm_file_btn"):
+                    st.session_state["chk_excluded_files"].append(chk_file_rm)
+                    st.rerun()
+            with crm3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🧹 Clear All Files", use_container_width=True, key="chk_clr_files_btn"):
+                    st.session_state["chk_upload_nonce"] += 1
+                    st.session_state["chk_excluded_files"] = []
+                    st.rerun()
+
+            st.markdown(f"**Review & Customize Chapter Execution Sequence ({len(active_chk_files)} Active Files):**")
+            chk_seq_hash = abs(hash(tuple(f.name for f in active_chk_files)))
+            chk_edited_seq = st.data_editor(
+                pd.DataFrame(parse_chapter_sequence([f.name for f in active_chk_files])),
+                use_container_width=True,
+                disabled=["Filename"],
+                key=f"chk_seq_ed_{chk_nonce}_{chk_seq_hash}"
+            )
+
+        if active_chk_files and chk_edited_seq is not None and st.button("🚀 Run Independent 1-to-N Batch Audit", type="primary", use_container_width=True, key="chk_run_batch"):
             full_syl = (extract_text_from_file(chk_b_syl) + "\n" + chk_b_lo).strip()
             ordered = chk_edited_seq.sort_values(by="Chapter_Number").to_dict("records")
-            f_map = {f.name: f for f in chk_b_files}
+            f_map = {f.name: f for f in active_chk_files}
             all_txt = {r["Filename"]: (r["Filename"] if r["Filename"].lower().endswith((".xlsx", ".csv")) else extract_text_from_file(f_map[r["Filename"]])) for r in ordered}
 
             chapters_out, comb_mat, comb_def = [], [], []
@@ -1572,7 +1679,13 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
     if st.session_state["checker_independent_audit"]:
         chk_audit = st.session_state["checker_independent_audit"]
         st.markdown("---")
-        st.subheader(f"📊 Independent Audit: `{chk_audit['id']}`")
+        cd_hdr1, cd_hdr2 = st.columns([3.5, 1])
+        with cd_hdr1:
+            st.subheader(f"📊 Independent Audit: `{chk_audit['id']}`")
+        with cd_hdr2:
+            if st.button("🗑️ Clear Active Dossier", use_container_width=True, key="chk_clear_dossier_btn"):
+                st.session_state["checker_independent_audit"] = None
+                st.rerun()
 
         ik1, ik2, ik3, ik4 = st.columns(4)
         ik1.metric("Automated Pre-Score", f"{chk_audit.get('l1_automated_score', chk_audit['l2_score'])}%")
@@ -1583,6 +1696,16 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
         if "chapters" in chk_audit and chk_audit["chapters"]:
             st.plotly_chart(render_chapter_comparison_bar(chk_audit["chapters"], active_cfg), use_container_width=True)
             st.dataframe(pd.DataFrame(chk_audit["chapters"]), use_container_width=True)
+            crc1, crc2 = st.columns([3, 1])
+            with crc1:
+                chk_ch_opts = {f"Ch {c['chapter_num']}: {c['chapter_name']}": c["chapter_num"] for c in chk_audit["chapters"]}
+                sel_chk_ch_rm = st.selectbox("Select Chapter to Remove One-by-One from Dossier", list(chk_ch_opts.keys()), key="chk_ch_rm_sel")
+            with crc2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🗑️ Remove Chapter", use_container_width=True, key="chk_ch_rm_btn"):
+                    updated = remove_chapter_from_audit(chk_audit, chk_ch_opts[sel_chk_ch_rm], active_cfg, is_checker_direct=True)
+                    st.session_state["checker_independent_audit"] = updated
+                    st.rerun()
 
         st.markdown("#### Item Review & Regulatory Overrides")
         items_direct = chk_audit.get("item_level_defects", [])
@@ -1623,7 +1746,6 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
             edited_ind_df = pd.DataFrame()
             calibrated_ind_score = float(chk_audit["l2_score"])
 
-        # Regulatory Gating Check
         sim_ok = float(chk_audit.get("similarity_index", 0)) <= active_cfg["similarity_max"]
         ai_ok = float(chk_audit.get("ai_index", 0)) <= active_cfg["ai_max"]
         if not sim_ok or not ai_ok:
@@ -1665,7 +1787,7 @@ elif st.session_state["active_nav"] == "Independent Checker Workspace (Direct QA
                 st.rerun()
 
 # ==============================================================================
-# VIEW 4: CHECKER QUEUE (REVIEW FORWARDED MAKER AUDITS — SINGLE & BATCH)
+# VIEW 4: CHECKER QUEUE (REVIEW FORWARDED MAKER AUDITS + DELETE CONTROLS)
 # ==============================================================================
 elif st.session_state["active_nav"] == "Checker Queue (Review Forwarded Audits)":
     st.title("🛡️ Checker Queue: Review Forwarded Maker Audits")
@@ -1678,11 +1800,21 @@ elif st.session_state["active_nav"] == "Checker Queue (Review Forwarded Audits)"
         st.info("No Maker-submitted audits currently awaiting Level-2 clearance in the queue.")
     else:
         st.markdown(f"### 📋 Audits Awaiting Review ({len(pending_checker)})")
-        selected_aud_id = st.selectbox(
-            "Select Audit to Review",
-            [f"{s['id']} — {s['title']} ({s.get('scope_type', 'Single Unit')}) [Maker: {s['maker_email']}]" for s in pending_checker]
-        )
+        q_col1, q_col2 = st.columns([3, 1])
+        with q_col1:
+            selected_aud_id = st.selectbox(
+                "Select Audit to Review",
+                [f"{s['id']} — {s['title']} ({s.get('scope_type', 'Single Unit')}) [Maker: {s['maker_email']}]" for s in pending_checker]
+            )
         aud_id = selected_aud_id.split(" — ")[0]
+        with q_col2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🗑️ Remove from Queue", use_container_width=True, key="q_delete_one"):
+                updated_subs = [s for s in submissions if s.get("id") != aud_id]
+                save_json(SUBMISSIONS_FILE, updated_subs)
+                st.success(f"Removed {aud_id} from queue.")
+                st.rerun()
+
         audit = next(s for s in submissions if s["id"] == aud_id)
 
         with st.container(border=True):
@@ -1787,7 +1919,7 @@ elif st.session_state["active_nav"] == "Checker Queue (Review Forwarded Audits)"
                 st.rerun()
 
 # ==============================================================================
-# VIEW 5: ALL AUDITS & COMPLIANCE REGISTRY (EXCEL + PRINTABLE DOSSIER EXPORTS)
+# VIEW 5: ALL AUDITS & COMPLIANCE REGISTRY (EXPORTS + ONE-BY-ONE / CLEAR ALL)
 # ==============================================================================
 elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
     st.title("📚 Regulatory Compliance & Audit History Registry")
@@ -1819,7 +1951,7 @@ elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
 
         st.markdown("---")
         st.subheader("📥 Export Official Regulatory Audit Artifacts")
-        sel_export_id = st.selectbox("Select Audit to Export", [s["id"] for s in submissions])
+        sel_export_id = st.selectbox("Select Audit Dossier", [s["id"] for s in submissions], key="reg_sel_dossier")
         export_aud = next(s for s in submissions if s["id"] == sel_export_id)
 
         ex1, ex2 = st.columns(2)
@@ -1844,3 +1976,32 @@ elif st.session_state["active_nav"] == "All Audits & Compliance Registry":
                 mime="text/html",
                 use_container_width=True
             )
+
+        st.markdown("---")
+        st.subheader("🗑️ Manage & Purge Stored Dossiers (One-by-One or Clear All)")
+        del_c1, del_c2 = st.columns(2)
+
+        with del_c1:
+            with st.container(border=True):
+                st.markdown("**Remove Single Dossier (One-by-One)**")
+                del_target_id = st.selectbox("Select Dossier ID to Delete", [s["id"] for s in submissions], key="reg_del_one_sel")
+                if st.button("🗑️ Delete Selected Dossier", type="secondary", use_container_width=True, key="reg_del_one_btn"):
+                    remaining = [s for s in submissions if s.get("id") != del_target_id]
+                    save_json(SUBMISSIONS_FILE, remaining)
+                    if st.session_state.get("maker_audit") and st.session_state["maker_audit"].get("id") == del_target_id:
+                        st.session_state["maker_audit"] = None
+                    if st.session_state.get("checker_independent_audit") and st.session_state["checker_independent_audit"].get("id") == del_target_id:
+                        st.session_state["checker_independent_audit"] = None
+                    st.success(f"Dossier `{del_target_id}` deleted.")
+                    st.rerun()
+
+        with del_c2:
+            with st.container(border=True):
+                st.markdown("**Purge All Stored Dossiers**")
+                confirm_purge = st.checkbox(f"Confirm permanent removal of all {len(submissions)} stored dossiers", key="reg_confirm_purge")
+                if st.button("🧹 Clear All Dossiers", type="primary", use_container_width=True, disabled=not confirm_purge, key="reg_del_all_btn"):
+                    save_json(SUBMISSIONS_FILE, [])
+                    st.session_state["maker_audit"] = None
+                    st.session_state["checker_independent_audit"] = None
+                    st.success("All stored audit dossiers have been cleared.")
+                    st.rerun()
