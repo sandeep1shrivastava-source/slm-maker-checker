@@ -1,6 +1,12 @@
 [server]
-fileWatcherType = "none"
+port = 8502
 headless = true
+enableCORS = false
+enableXsrfProtection = true
 
-[browser]
-gatherUsageStats = false
+[theme]
+base = "light"
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f8f9fa"
+textColor = "#1e293b"
