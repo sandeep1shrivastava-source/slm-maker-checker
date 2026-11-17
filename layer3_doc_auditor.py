@@ -1,3 +1,4 @@
+from layer3_auth import require_team_auth
 import os
 import io
 import re
@@ -1279,6 +1280,8 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
+    if not require_team_auth():
+        st.stop()
     st.sidebar.header("⚙️ Layer-3 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
