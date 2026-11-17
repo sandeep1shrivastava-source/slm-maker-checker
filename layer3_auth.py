@@ -12,13 +12,30 @@ import streamlit as st
 SESSION_TTL_SECONDS = 12 * 3600  # 12-hour workplace session
 
 
+def parse_approved_emails() -> set[str]:
+    raw = (
+        st.secrets.get("APPROVED_EMAILS")
+        or st.secrets.get("ALLOWED_EMAILS")
+        or st.secrets.get("AUTHORIZED_EMAILS")
+        or ""
+    )
+    if isinstance(raw, (list, tuple, set)):
+        return {str(e).strip().strip("'\"").lower() for e in raw if str(e).strip()}
+    cleaned = str(raw).strip().strip("[]")
+    return {
+        e.strip().strip("'\"").lower()
+        for e in re.split(r"[,;\n\r]+", cleaned)
+        if e.strip().strip("'\"")
+    }
+
+
 def _signing_key() -> bytes:
     seed = (
-        str(st.secrets.get("TEAM_PASSCODE", ""))
+        str(st.secrets.get("TEAM_PASSCODE", "")).strip()
         + "|"
-        + str(st.secrets.get("SMTP_PASS", ""))
+        + str(st.secrets.get("SMTP_PASS", "")).strip()
         + "|"
-        + str(st.secrets.get("APPROVED_EMAILS", ""))
+        + ",".join(sorted(parse_approved_emails()))
     )
     return hashlib.sha256(seed.encode("utf-8")).digest()
 
@@ -58,23 +75,6 @@ def get_current_auth_token() -> str:
     tok = create_signed_auth_token(user)
     st.session_state["layer3_auth_token"] = tok
     return tok
-
-
-def parse_approved_emails() -> set[str]:
-    raw = (
-        st.secrets.get("APPROVED_EMAILS")
-        or st.secrets.get("ALLOWED_EMAILS")
-        or st.secrets.get("AUTHORIZED_EMAILS")
-        or ""
-    )
-    if isinstance(raw, (list, tuple, set)):
-        return {str(e).strip().strip("'\"").lower() for e in raw if str(e).strip()}
-    cleaned = str(raw).strip().strip("[]")
-    return {
-        e.strip().strip("'\"").lower()
-        for e in re.split(r"[,;\n\r]+", cleaned)
-        if e.strip().strip("'\"")
-    }
 
 
 def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
@@ -127,7 +127,7 @@ def require_team_auth() -> bool:
         st.error("Access locked: Configure APPROVED_EMAILS or TEAM_PASSCODE in Streamlit Secrets.")
         return False
 
-    # Restore session from URL token (_auth) or Google OAuth callback state
+    # Restore session automatically from URL token (_auth) or Google OAuth callback (state)
     if not st.session_state.get("layer3_auth_ok", False):
         url_tok = str(st.query_params.get("_auth") or st.query_params.get("state") or "").strip()
         verified_user = verify_signed_auth_token(url_tok)
@@ -136,6 +136,7 @@ def require_team_auth() -> bool:
             st.session_state["layer3_auth_user"] = verified_user
             st.session_state["layer3_auth_token"] = url_tok
 
+    # If already signed in, keep _auth in URL and exit BEFORE rendering any login form
     if st.session_state.get("layer3_auth_ok", False):
         tok = get_current_auth_token()
         if st.query_params.get("_auth") != tok:
@@ -214,6 +215,7 @@ def require_team_auth() -> bool:
                                 st.session_state["layer3_auth_user"] = target
                                 st.session_state["layer3_auth_token"] = tok
                                 st.query_params["_auth"] = tok
+                                st.rerun()
                             else:
                                 st.error("Invalid verification code.")
             idx += 1
@@ -229,7 +231,8 @@ def require_team_auth() -> bool:
                             st.session_state["layer3_auth_user"] = "Passcode Session"
                             st.session_state["layer3_auth_token"] = tok
                             st.query_params["_auth"] = tok
+                            st.rerun()
                         else:
                             st.error("Incorrect passcode.")
 
-    return bool(st.session_state.get("layer3_auth_ok", False))
+    return False
