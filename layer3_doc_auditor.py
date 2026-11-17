@@ -20,7 +20,7 @@ import streamlit as st
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
@@ -276,8 +276,19 @@ def build_clients_from_service_account(key_dict: dict):
     )
 
 
+def _extract_oauth_secret_dict() -> dict:
+    if "gcp_user_oauth" not in st.secrets:
+        return {}
+    raw = dict(st.secrets["gcp_user_oauth"])
+    if "web" in raw:
+        return dict(raw["web"])
+    if "installed" in raw:
+        return dict(raw["installed"])
+    return raw
+
+
 def get_gcp_services():
-    """Supports both Personal Google OAuth (inherits your Editor rights) and GCP Service Account."""
+    """Supports Personal Google OAuth (via secrets.toml or local JSON) and GCP Service Account."""
     auth_mode = st.sidebar.radio(
         "Google Drive Authentication Mode:",
         options=[
@@ -292,35 +303,94 @@ def get_gcp_services():
         creds = None
         token_path = os.path.join(".streamlit", "oauth_token.json")
         client_secret_path = os.path.join(".streamlit", "oauth_client.json")
+        secret_oauth = _extract_oauth_secret_dict()
 
-        if "gcp_user_oauth" in st.secrets:
-            creds = Credentials.from_authorized_user_info(dict(st.secrets["gcp_user_oauth"]), GCP_SCOPES)
-        elif os.path.exists(token_path):
-            creds = Credentials.from_authorized_user_file(token_path, GCP_SCOPES)
+        if st.session_state.get("gcp_oauth_creds_json"):
+            try:
+                creds = Credentials.from_authorized_user_info(
+                    json.loads(st.session_state["gcp_oauth_creds_json"]), GCP_SCOPES
+                )
+            except Exception:
+                creds = None
+
+        if creds is None and secret_oauth.get("refresh_token"):
+            try:
+                creds = Credentials.from_authorized_user_info(secret_oauth, GCP_SCOPES)
+            except Exception as exc:
+                st.sidebar.warning(f"OAuth secret load error: {exc}")
+                creds = None
+
+        if creds is None and os.path.exists(token_path):
+            try:
+                creds = Credentials.from_authorized_user_file(token_path, GCP_SCOPES)
+            except Exception:
+                creds = None
 
         if creds and creds.expired and creds.refresh_token:
             try:
                 creds.refresh(Request())
+                st.session_state["gcp_oauth_creds_json"] = creds.to_json()
                 if os.path.exists(token_path):
                     with open(token_path, "w", encoding="utf-8") as tf:
                         tf.write(creds.to_json())
-            except Exception:
+            except Exception as exc:
+                st.sidebar.warning(f"Saved OAuth token expired ({exc}). Click Sign In below.")
                 creds = None
 
         if not creds or not creds.valid:
-            if not os.path.exists(client_secret_path):
-                st.sidebar.warning("Place `.streamlit/oauth_client.json` in your project folder to sign in.")
-                st.info(
-                    "Save your Desktop OAuth JSON as `.streamlit/oauth_client.json` (or switch to GCP Service Account in the sidebar)."
+            if secret_oauth.get("client_id") and secret_oauth.get("client_secret"):
+                redirect_uri = str(
+                    secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
+                ).strip()
+                web_cfg = {
+                    "web": {
+                        "client_id": secret_oauth["client_id"],
+                        "client_secret": secret_oauth["client_secret"],
+                        "auth_uri": secret_oauth.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+                        "token_uri": secret_oauth.get("token_uri", "https://oauth2.googleapis.com/token"),
+                        "redirect_uris": [redirect_uri],
+                    }
+                }
+                flow = Flow.from_client_config(web_cfg, scopes=GCP_SCOPES, redirect_uri=redirect_uri)
+
+                auth_code = st.query_params.get("code")
+                if auth_code:
+                    try:
+                        flow.fetch_token(code=auth_code)
+                        creds = flow.credentials
+                        st.session_state["gcp_oauth_creds_json"] = creds.to_json()
+                        st.query_params.clear()
+                        st.rerun()
+                    except Exception as exc:
+                        st.query_params.clear()
+                        st.sidebar.error(f"Google OAuth sign-in failed: {exc}")
+                        return None, None, ""
+
+                auth_url, _ = flow.authorization_url(
+                    access_type="offline",
+                    include_granted_scopes="true",
+                    prompt="consent",
                 )
+                st.sidebar.link_button(
+                    "🔐 Sign In with Google Account",
+                    auth_url,
+                    type="primary",
+                    use_container_width=True,
+                )
+                st.info("Click **Sign In with Google Account** in the left sidebar to unlock the audit pipeline.")
                 return None, None, ""
-            if st.sidebar.button("🔐 Sign In with My Google Account", type="primary"):
-                flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, GCP_SCOPES)
-                creds = flow.run_local_server(port=0)
-                os.makedirs(".streamlit", exist_ok=True)
-                with open(token_path, "w", encoding="utf-8") as tf:
-                    tf.write(creds.to_json())
-                st.rerun()
+
+            if os.path.exists(client_secret_path):
+                if st.sidebar.button("🔐 Sign In with My Google Account", type="primary"):
+                    flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, GCP_SCOPES)
+                    creds = flow.run_local_server(port=0)
+                    os.makedirs(".streamlit", exist_ok=True)
+                    with open(token_path, "w", encoding="utf-8") as tf:
+                        tf.write(creds.to_json())
+                    st.rerun()
+                return None, None, ""
+
+            st.sidebar.warning("Add client_id and client_secret under [gcp_user_oauth] in Streamlit Secrets.")
             return None, None, ""
 
         with st.sidebar.expander("☁️ Streamlit Cloud OAuth Token (TOML)", expanded=False):
@@ -343,7 +413,7 @@ def get_gcp_services():
                 st.error(f"GCP Service Account error: {exc}")
                 return None, None, ""
 
-    st.error("Configure `gcp_service_account` in `.streamlit/secrets.toml` or switch to 'My Google Account (OAuth)'.")
+    st.error("Configure `gcp_service_account` in Streamlit Secrets or switch to 'My Google Account (OAuth)'.")
     return None, None, ""
 
 
