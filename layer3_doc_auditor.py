@@ -1,3 +1,4 @@
+import urllib.parse
 import os
 import io
 import re
@@ -288,135 +289,119 @@ def _extract_oauth_secret_dict() -> dict:
 
 
 def get_gcp_services():
-    """Returns (drive_svc, sheets_svc, account_label, status_msg, oauth_login_url)."""
-    auth_mode = st.sidebar.radio(
-        "Google Drive Authentication Mode:",
-        options=[
-            "My Google Account (OAuth — Shared Files)",
-            "GCP Service Account (secrets.toml)",
-        ],
-        index=0,
-        help="Use 'My Google Account' to audit manuscripts owned by others and shared with your email.",
-    )
+    """Connects Google Drive & Sheets directly via Google Email OAuth (no local JSON or second OTP)."""
+    creds = None
+    secret_oauth = _extract_oauth_secret_dict()
+    diag_notes = []
 
-    if auth_mode.startswith("My Google Account"):
-        creds = None
-        token_path = os.path.join(".streamlit", "oauth_token.json")
-        client_secret_path = os.path.join(".streamlit", "oauth_client.json")
-        secret_oauth = _extract_oauth_secret_dict()
-        diag_notes = []
+    # 1. Active session credentials
+    if st.session_state.get("gcp_oauth_creds_json"):
+        try:
+            creds = Credentials.from_authorized_user_info(
+                json.loads(st.session_state["gcp_oauth_creds_json"]), GCP_SCOPES
+            )
+        except Exception as exc:
+            diag_notes.append(f"Session token error: {exc}")
+            creds = None
 
-        if st.session_state.get("gcp_oauth_creds_json"):
-            try:
-                creds = Credentials.from_authorized_user_info(
-                    json.loads(st.session_state["gcp_oauth_creds_json"]), GCP_SCOPES
-                )
-            except Exception as exc:
-                diag_notes.append(f"Session token error: {exc}")
-                creds = None
+    # 2. Saved refresh_token in Streamlit Secrets (if configured)
+    if creds is None and secret_oauth.get("refresh_token"):
+        try:
+            creds = Credentials.from_authorized_user_info(secret_oauth, GCP_SCOPES)
+        except Exception as exc:
+            diag_notes.append(f"Saved refresh_token error: {exc}")
+            creds = None
 
-        if creds is None and secret_oauth.get("refresh_token"):
-            try:
-                creds = Credentials.from_authorized_user_info(secret_oauth, GCP_SCOPES)
-            except Exception as exc:
-                diag_notes.append(f"Secrets token error: {exc}")
-                creds = None
-
-        if creds is None and os.path.exists(token_path):
-            try:
-                creds = Credentials.from_authorized_user_file(token_path, GCP_SCOPES)
-            except Exception:
-                creds = None
-
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-                st.session_state["gcp_oauth_creds_json"] = creds.to_json()
-                if os.path.exists(token_path):
-                    with open(token_path, "w", encoding="utf-8") as tf:
-                        tf.write(creds.to_json())
-            except Exception as exc:
-                diag_notes.append(f"Saved Google OAuth refresh token expired or revoked ({exc}).")
-                creds = None
-
-        if not creds or not creds.valid:
-            if secret_oauth.get("client_id") and secret_oauth.get("client_secret"):
-                redirect_uri = str(
-                    secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
-                ).strip()
-                web_cfg = {
-                    "web": {
-                        "client_id": secret_oauth["client_id"],
-                        "client_secret": secret_oauth["client_secret"],
-                        "auth_uri": secret_oauth.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
-                        "token_uri": secret_oauth.get("token_uri", "https://oauth2.googleapis.com/token"),
-                        "redirect_uris": [redirect_uri],
-                    }
+    # 3. Complete Google OAuth callback (?code=...) via direct token endpoint
+    auth_code = str(st.query_params.get("code", "")).strip()
+    if (creds is None or not creds.valid) and auth_code and secret_oauth.get("client_id") and secret_oauth.get("client_secret"):
+        redirect_uri = str(
+            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
+        ).strip()
+        try:
+            resp = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": auth_code,
+                    "client_id": str(secret_oauth["client_id"]).strip(),
+                    "client_secret": str(secret_oauth["client_secret"]).strip(),
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                timeout=20,
+            )
+            tok_data = resp.json()
+            if resp.status_code == 200 and tok_data.get("access_token"):
+                creds_payload = {
+                    "token": tok_data["access_token"],
+                    "refresh_token": tok_data.get("refresh_token", secret_oauth.get("refresh_token", "")),
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "client_id": str(secret_oauth["client_id"]).strip(),
+                    "client_secret": str(secret_oauth["client_secret"]).strip(),
+                    "scopes": GCP_SCOPES,
                 }
-                flow = Flow.from_client_config(web_cfg, scopes=GCP_SCOPES, redirect_uri=redirect_uri)
-                flow.autogenerate_code_verifier = False
-                flow.code_verifier = None
+                st.session_state["gcp_oauth_creds_json"] = json.dumps(creds_payload)
+                creds = Credentials.from_authorized_user_info(creds_payload, GCP_SCOPES)
+            else:
+                err_desc = tok_data.get("error_description") or tok_data.get("error") or resp.text[:200]
+                diag_notes.append(f"Google OAuth token error: {err_desc}")
+        except Exception as exc:
+            diag_notes.append(f"Google OAuth connection error: {exc}")
+        finally:
+            for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"):
+                st.query_params.pop(_qp, None)
 
-                auth_code = st.query_params.get("code")
-                if auth_code:
-                    try:
-                        flow.fetch_token(code=auth_code)
-                        creds = flow.credentials
-                        st.session_state["gcp_oauth_creds_json"] = creds.to_json()
-                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"):
-                            st.query_params.pop(_qp, None)
-                    except Exception as exc:
-                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"): st.query_params.pop(_qp, None)
-                        return None, None, "", f"Google OAuth sign-in failed: {exc}", ""
+    # 4. Auto-refresh expired access token if refresh_token exists
+    if creds and creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(Request())
+            st.session_state["gcp_oauth_creds_json"] = creds.to_json()
+        except Exception as exc:
+            diag_notes.append(f"Access token refresh failed: {exc}")
+            creds = None
 
-                auth_url, _ = flow.authorization_url(
-                    access_type="offline",
-                    include_granted_scopes="true",
-                    prompt="consent",
-                    state=get_current_auth_token(),
-                )
-                reason = " ".join(diag_notes) if diag_notes else "Google Drive is not signed in yet."
-                return None, None, "", reason, auth_url
+    # 5. If not connected yet, generate same-tab Google Email Sign-In URL
+    if not creds or not creds.valid:
+        if not secret_oauth.get("client_id") or not secret_oauth.get("client_secret"):
+            return None, None, "", "Missing client_id / client_secret under [gcp_user_oauth] in Streamlit Secrets.", ""
 
-            if os.path.exists(client_secret_path):
-                if st.sidebar.button("🔐 Sign In with My Google Account", type="primary"):
-                    flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, GCP_SCOPES)
-                    creds = flow.run_local_server(port=0)
-                    os.makedirs(".streamlit", exist_ok=True)
-                    with open(token_path, "w", encoding="utf-8") as tf:
-                        tf.write(creds.to_json())
-                    st.rerun()
-                return None, None, "", "Click 'Sign In with My Google Account' in the sidebar.", ""
+        redirect_uri = str(
+            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
+        ).strip()
+        login_hint = str(st.session_state.get("layer3_auth_user", "")).strip()
+        oauth_params = {
+            "client_id": str(secret_oauth["client_id"]).strip(),
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(GCP_SCOPES),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": get_current_auth_token(),
+        }
+        if "@" in login_hint:
+            oauth_params["login_hint"] = login_hint
 
-            missing_msg = (
-                " ".join(diag_notes)
-                + " `[gcp_user_oauth]` in Streamlit Secrets is missing `client_id` / `client_secret`."
-            ).strip()
-            return None, None, "", missing_msg, ""
+        auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(oauth_params)
+        reason = " ".join(diag_notes) if diag_notes else "Click the button below to connect your Google Drive via Google Email login."
+        return None, None, "", reason, auth_url
 
-        with st.sidebar.expander("☁️ Streamlit Cloud OAuth Token (TOML)", expanded=False):
-            tok_data = json.loads(creds.to_json())
-            toml_lines = ["[gcp_user_oauth]"] + [f"{k} = {json.dumps(v)}" for k, v in tok_data.items()]
-            st.code("\n".join(toml_lines), language="toml")
+    drive_svc = build("drive", "v3", credentials=creds, cache_discovery=False)
+    sheets_svc = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
-        return (
-            build("drive", "v3", credentials=creds, cache_discovery=False),
-            build("sheets", "v4", credentials=creds, cache_discovery=False),
-            "Personal Google Account (OAuth Active)",
-            "",
-            "",
-        )
+    google_email = st.session_state.get("layer3_auth_user", "Google Account")
+    try:
+        about = drive_svc.about().get(fields="user(emailAddress)").execute()
+        google_email = about.get("user", {}).get("emailAddress") or google_email
+    except Exception:
+        pass
 
-    if "gcp_service_account" in st.secrets:
-        raw_sec = dict(st.secrets["gcp_service_account"])
-        if str(raw_sec.get("private_key", "")).strip().startswith("-----BEGIN"):
-            try:
-                d_svc, s_svc, email = build_clients_from_service_account(raw_sec)
-                return d_svc, s_svc, email, "", ""
-            except Exception as exc:
-                return None, None, "", f"GCP Service Account error: {exc}", ""
+    with st.sidebar.expander("☁️ Permanent Drive Token (Optional)", expanded=False):
+        st.caption("Paste into Streamlit Secrets under [gcp_user_oauth] to skip clicking Google Sign-In next time:")
+        tok_data = json.loads(creds.to_json())
+        toml_lines = ["[gcp_user_oauth]"] + [f"{k} = {json.dumps(v)}" for k, v in tok_data.items()]
+        st.code("\n".join(toml_lines), language="toml")
 
-    return None, None, "", "Configure `gcp_service_account` in Streamlit Secrets or use My Google Account (OAuth).", ""
+    return drive_svc, sheets_svc, google_email, "", ""
 
 
 # ==============================================================================
@@ -1583,15 +1568,17 @@ def main():
 
     if drive_svc is None or sheets_svc is None:
         with st.container(border=True):
-            st.warning(f"**Google Drive & Sheets Not Connected:** {gcp_status_msg}")
+            st.warning(f"**Step 2: Connect Google Drive** — {gcp_status_msg}")
             if oauth_login_url:
-                st.link_button("🔐 Sign In with Google Account", oauth_login_url, type="primary")
-            st.caption(
-                "Tip: You can still run **Quick Single-File Audit** below using local file uploads, "
-                "or switch to **GCP Service Account** in the left sidebar."
-            )
+                st.markdown(
+                    f'<a href="{oauth_login_url}" target="_self" style="display:inline-block;padding:0.55rem 1.1rem;'
+                    f'background-color:#ff4b4b;color:#ffffff;font-weight:600;border-radius:6px;text-decoration:none;">'
+                    f'🔐 Sign In with Google Email to Connect Drive</a>',
+                    unsafe_allow_html=True,
+                )
+            st.caption("You can also run **Quick Single-File Audit** below using local file uploads without Drive.")
     else:
-        st.success(f"✅ Connected: **{sa_email}**")
+        st.success(f"✅ **Google Drive & Sheets Connected:** `{sa_email}`")
 
     work_mode = st.radio(
         "Select Workflow Mode:",

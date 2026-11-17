@@ -9,7 +9,7 @@ import time
 from email.mime.text import MIMEText
 import streamlit as st
 
-SESSION_TTL_SECONDS = 12 * 3600  # 12 hours persistent sign-in
+SESSION_TTL_SECONDS = 12 * 3600  # 12-hour workplace session
 
 
 def _signing_key() -> bytes:
@@ -127,7 +127,7 @@ def require_team_auth() -> bool:
         st.error("Access locked: Configure APPROVED_EMAILS or TEAM_PASSCODE in Streamlit Secrets.")
         return False
 
-    # Restore session automatically from signed URL token (_auth) or Google OAuth state callback
+    # Restore session from URL token (_auth) or Google OAuth callback state
     if not st.session_state.get("layer3_auth_ok", False):
         url_tok = str(st.query_params.get("_auth") or st.query_params.get("state") or "").strip()
         verified_user = verify_signed_auth_token(url_tok)
@@ -135,15 +135,13 @@ def require_team_auth() -> bool:
             st.session_state["layer3_auth_ok"] = True
             st.session_state["layer3_auth_user"] = verified_user
             st.session_state["layer3_auth_token"] = url_tok
-            if st.query_params.get("_auth") != url_tok:
-                st.query_params["_auth"] = url_tok
 
     if st.session_state.get("layer3_auth_ok", False):
         tok = get_current_auth_token()
         if st.query_params.get("_auth") != tok:
             st.query_params["_auth"] = tok
         usr = st.session_state.get("layer3_auth_user", "Team Member")
-        st.sidebar.success(f"👤 Signed in: **{usr}**")
+        st.sidebar.success(f"👤 Workplace Login: **{usr}**")
         if st.sidebar.button("🔒 Sign Out", use_container_width=True):
             for k in (
                 "layer3_auth_ok",
@@ -159,69 +157,79 @@ def require_team_auth() -> bool:
             st.rerun()
         return True
 
-    st.markdown("## 🔐 Layer-3 Academic Document Auditor — Team Sign-In")
-    st.caption("Verify your approved institutional email via One-Time Password (OTP) to unlock the QA pipeline.")
+    _, col_mid, _ = st.columns([1, 1.5, 1])
+    with col_mid:
+        st.markdown("## 🔐 Step 1: Layer-3 Workplace Sign-In")
+        st.caption("Verify your approved email ID via 6-digit OTP once to enter the QA workspace.")
 
-    tab_labels = (["📧 Email OTP Login (Approved IDs)"] if approved else []) + (
-        ["🔑 Team Passcode"] if passcode else []
-    )
-    tabs = st.tabs(tab_labels)
-    idx = 0
+        tab_labels = (["📧 Email ID + OTP Login"] if approved else []) + (
+            ["🔑 Team Passcode"] if passcode else []
+        )
+        tabs = st.tabs(tab_labels)
+        idx = 0
 
-    if approved:
-        with tabs[idx]:
-            with st.form("layer3_send_otp_form", clear_on_submit=False):
-                email_in = st.text_input("Approved Work Email ID:", placeholder="name@upgrad.com").strip().lower()
-                if st.form_submit_button("📨 Send 6-Digit OTP", type="primary"):
-                    if not email_in or "@" not in email_in:
-                        st.error("Please enter a valid email address.")
-                    elif email_in not in approved:
-                        st.error("Access denied: This email ID is not in APPROVED_EMAILS.")
-                    else:
-                        code = f"{py_secrets.randbelow(900000) + 100000}"
-                        with st.spinner("Sending 6-digit verification code..."):
-                            ok, status = send_otp_email(email_in, code)
-                        if ok:
-                            st.session_state.update(
-                                {
-                                    "layer3_otp_code": code,
-                                    "layer3_otp_email": email_in,
-                                    "layer3_otp_ts": time.time(),
-                                }
-                            )
-                            st.success(f"A 6-digit OTP has been sent to **{email_in}** (valid for 15 minutes).")
+        if approved:
+            with tabs[idx]:
+                with st.form("layer3_send_otp_form", clear_on_submit=False):
+                    email_in = st.text_input(
+                        "Approved Work Email ID:",
+                        value=st.session_state.get("layer3_otp_email", ""),
+                        placeholder="sandeep1.shrivastava@upgrad.com",
+                    ).strip().lower()
+                    if st.form_submit_button("📨 Send 6-Digit OTP", type="primary", use_container_width=True):
+                        if not email_in or "@" not in email_in:
+                            st.error("Please enter a valid email address.")
+                        elif email_in not in approved:
+                            st.error("Access denied: This email ID is not in APPROVED_EMAILS.")
                         else:
-                            st.error(status)
+                            code = f"{py_secrets.randbelow(900000) + 100000}"
+                            with st.spinner("Sending 6-digit verification code..."):
+                                ok, status = send_otp_email(email_in, code)
+                            if ok:
+                                st.session_state.update(
+                                    {
+                                        "layer3_otp_code": code,
+                                        "layer3_otp_email": email_in,
+                                        "layer3_otp_ts": time.time(),
+                                    }
+                                )
+                                st.success(f"6-digit OTP sent to **{email_in}** (valid for 15 minutes).")
+                            else:
+                                st.error(status)
 
-            if st.session_state.get("layer3_otp_email"):
-                target = st.session_state["layer3_otp_email"]
-                with st.form("layer3_verify_otp_form", clear_on_submit=False):
-                    entered = st.text_input(f"Enter 6-Digit OTP sent to {target}:", max_chars=6).strip()
-                    if st.form_submit_button("✅ Verify & Unlock Layer-3", type="primary"):
-                        if time.time() - st.session_state.get("layer3_otp_ts", 0) > 900:
-                            st.error("OTP expired (15-minute limit). Please request a new code.")
-                        elif hmac.compare_digest(entered, str(st.session_state.get("layer3_otp_code", ""))):
-                            tok = create_signed_auth_token(target)
+                if st.session_state.get("layer3_otp_email"):
+                    target = st.session_state["layer3_otp_email"]
+                    with st.form("layer3_verify_otp_form", clear_on_submit=False):
+                        entered = st.text_input(
+                            f"Enter 6-Digit OTP sent to {target}:",
+                            max_chars=6,
+                            placeholder="123456",
+                        ).strip()
+                        if st.form_submit_button("✅ Verify OTP & Enter Workspace", type="primary", use_container_width=True):
+                            if time.time() - st.session_state.get("layer3_otp_ts", 0) > 900:
+                                st.error("OTP expired (15-minute limit). Please request a new code.")
+                            elif hmac.compare_digest(entered, str(st.session_state.get("layer3_otp_code", ""))):
+                                tok = create_signed_auth_token(target)
+                                st.session_state["layer3_auth_ok"] = True
+                                st.session_state["layer3_auth_user"] = target
+                                st.session_state["layer3_auth_token"] = tok
+                                st.query_params["_auth"] = tok
+                            else:
+                                st.error("Invalid verification code.")
+            idx += 1
+
+        if passcode:
+            with tabs[idx]:
+                with st.form("layer3_passcode_form", clear_on_submit=False):
+                    pw = st.text_input("Team Passcode:", type="password", placeholder="Enter team passcode")
+                    if st.form_submit_button("Unlock with Passcode", type="primary", use_container_width=True):
+                        if hmac.compare_digest(pw.strip(), passcode):
+                            tok = create_signed_auth_token("Passcode Session")
                             st.session_state["layer3_auth_ok"] = True
-                            st.session_state["layer3_auth_user"] = target
+                            st.session_state["layer3_auth_user"] = "Passcode Session"
                             st.session_state["layer3_auth_token"] = tok
                             st.query_params["_auth"] = tok
                         else:
-                            st.error("Invalid verification code.")
-        idx += 1
+                            st.error("Incorrect passcode.")
 
-    if passcode:
-        with tabs[idx]:
-            with st.form("layer3_passcode_form", clear_on_submit=False):
-                pw = st.text_input("Team Passcode:", type="password", placeholder="Enter team passcode")
-                if st.form_submit_button("Unlock with Passcode", type="primary"):
-                    if hmac.compare_digest(pw.strip(), passcode):
-                        tok = create_signed_auth_token("Passcode Session")
-                        st.session_state["layer3_auth_ok"] = True
-                        st.session_state["layer3_auth_user"] = "Passcode Session"
-                        st.session_state["layer3_auth_token"] = tok
-                        st.query_params["_auth"] = tok
-                    else:
-                        st.error("Incorrect passcode.")
-
-    return False
+    return bool(st.session_state.get("layer3_auth_ok", False))
