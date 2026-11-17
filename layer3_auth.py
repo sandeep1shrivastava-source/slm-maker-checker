@@ -206,7 +206,6 @@ def require_team_auth() -> bool:
                             st.session_state["layer3_auth_user"] = target
                             st.session_state["layer3_auth_token"] = tok
                             st.query_params["_auth"] = tok
-                            st.rerun()
                         else:
                             st.error("Invalid verification code.")
         idx += 1
@@ -222,7 +221,6 @@ def require_team_auth() -> bool:
                         st.session_state["layer3_auth_user"] = "Passcode Session"
                         st.session_state["layer3_auth_token"] = tok
                         st.query_params["_auth"] = tok
-                        st.rerun()
                     else:
                         st.error("Incorrect passcode.")
 

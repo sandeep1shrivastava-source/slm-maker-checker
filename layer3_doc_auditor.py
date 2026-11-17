@@ -354,6 +354,8 @@ def get_gcp_services():
                     }
                 }
                 flow = Flow.from_client_config(web_cfg, scopes=GCP_SCOPES, redirect_uri=redirect_uri)
+                flow.autogenerate_code_verifier = False
+                flow.code_verifier = None
 
                 auth_code = st.query_params.get("code")
                 if auth_code:
@@ -361,8 +363,8 @@ def get_gcp_services():
                         flow.fetch_token(code=auth_code)
                         creds = flow.credentials
                         st.session_state["gcp_oauth_creds_json"] = creds.to_json()
-                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"): st.query_params.pop(_qp, None)
-                        st.rerun()
+                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"):
+                            st.query_params.pop(_qp, None)
                     except Exception as exc:
                         for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"): st.query_params.pop(_qp, None)
                         return None, None, "", f"Google OAuth sign-in failed: {exc}", ""
