@@ -191,6 +191,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+import streamlit as st
+from layer3_auth import require_team_auth  # match your function name in layer3_auth.py
+
+st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
+
+if not require_team_auth():
+    st.stop()
+
 st.markdown(
     """
     <style>
