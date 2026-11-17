@@ -196,7 +196,8 @@ from layer3_auth import require_team_auth, get_current_auth_token  # match your 
 
 st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
 
-# auth disabled
+if not require_team_auth():
+    st.stop()
 
 st.markdown(
     """
