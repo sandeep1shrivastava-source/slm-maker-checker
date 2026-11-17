@@ -1241,25 +1241,31 @@ def run_multi_provider_layer3_audit(
         f"=== MANUSCRIPT CONTENT ===\n{ms_context}"
     )
 
+    if provider == "Google Gemini":
+        candidate_models = []
+        for m in [model_id, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"]:
+            if m and m not in candidate_models:
+                candidate_models.append(m)
+    else:
+        candidate_models = [model_id, model_id]
+
     last_err = ""
-    for attempt in range(2):
+    for attempt, active_model in enumerate(candidate_models):
         try:
             if provider == "Google Gemini":
-                active_model = "gemini-2.5-flash" if (attempt > 0 and model_id != "gemini-2.5-flash") else model_id
                 parsed = call_gemini_rest(api_key.strip(), active_model, system_instruction, user_prompt)
-                model_id = active_model
             elif provider == "OpenAI (ChatGPT)":
-                parsed = call_openai_rest(api_key.strip(), model_id, system_instruction, user_prompt)
+                parsed = call_openai_rest(api_key.strip(), active_model, system_instruction, user_prompt)
             elif provider == "Anthropic (Claude)":
-                parsed = call_anthropic_rest(api_key.strip(), model_id, system_instruction, user_prompt)
+                parsed = call_anthropic_rest(api_key.strip(), active_model, system_instruction, user_prompt)
             else:
                 return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()))
 
-            parsed["_ai_provider_used"] = f"{provider} ({model_id})"
+            parsed["_ai_provider_used"] = f"{provider} ({active_model})"
             return parsed
         except Exception as exc:
-            last_err = str(exc)
-            time.sleep(2 * (attempt + 1))
+            last_err = f"[{active_model}] {exc}"
+            time.sleep(1.5 * (attempt + 1))
 
     return build_deterministic_fallback_report(
         title,
