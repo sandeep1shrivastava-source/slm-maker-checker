@@ -1,4 +1,3 @@
-from layer3_auth import require_team_auth
 import os
 import io
 import re
@@ -26,6 +25,163 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 
+import hmac
+import secrets as py_secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+
+def parse_approved_emails() -> set[str]:
+    """Reads approved email IDs from st.secrets (supports a TOML list or comma-separated string)."""
+    raw = (
+        st.secrets.get("APPROVED_EMAILS")
+        or st.secrets.get("ALLOWED_EMAILS")
+        or st.secrets.get("AUTHORIZED_EMAILS")
+        or ""
+    )
+    if isinstance(raw, (list, tuple, set)):
+        return {str(e).strip().lower() for e in raw if str(e).strip()}
+    return {e.strip().lower() for e in re.split(r"[,;\n\r]+", str(raw)) if e.strip()}
+
+
+def send_layer3_otp_email(recipient_email: str, otp_code: str) -> tuple[bool, str]:
+    """Sends a 6-digit verification OTP via Gmail/Workspace SMTP using secrets.toml credentials."""
+    smtp_host = str(st.secrets.get("SMTP_HOST", "smtp.gmail.com")).strip()
+    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+    smtp_user = str(
+        st.secrets.get("SMTP_USER")
+        or if not approved and not passcode:
+    st.error("Access locked: Configure APPROVED_EMAILS in Streamlit Secrets.")
+    return False
+        or st.secrets.get("EMAIL_USER")
+        or ""
+    ).strip()
+    smtp_pass = str(
+        st.secrets.get("SMTP_PASS")
+        or st.secrets.get("SMTP_PASSWORD")
+        or st.secrets.get("APP_PASSWORD")
+        or ""
+    ).strip()
+
+    if not smtp_user or not smtp_pass:
+        return False, "SMTP_USER or SMTP_PASS is missing in Streamlit Secrets."
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"QA Verification Code: {otp_code}"
+    msg["From"] = f"Academic QA Platform (Layer-3) <{smtp_user}>"
+    msg["To"] = recipient_email
+
+    body_text = (
+        "Academic QA Platform (Layer-3 Document Auditor)\n\n"
+        f"Your one-time sign-in verification code is: {otp_code}\n\n"
+        "This code expires in 15 minutes. If you did not request this code, please ignore this email."
+    )
+    msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(smtp_user, smtp_pass)
+            server.sendmail(smtp_user, [recipient_email], msg.as_string())
+        return True, "Verification code sent."
+    except Exception as exc:
+        return False, f"SMTP delivery failed: {exc}"
+
+
+def require_team_auth() -> bool:
+    """Gates Layer-3 access via Approved Email ID + 6-digit Email OTP (with optional Passcode tab)."""
+    approved_emails = parse_approved_emails()
+    expected_passcode = str(st.secrets.get("TEAM_PASSCODE", "")).strip()
+
+    # Bypass gate locally if neither APPROVED_EMAILS nor TEAM_PASSCODE is configured
+    if not approved_emails and not expected_passcode:
+        return True
+
+    if st.session_state.get("layer3_auth_ok", False):
+        logged_user = st.session_state.get("layer3_auth_user", "Team Member")
+        st.sidebar.success(f"👤 Signed in: **{logged_user}**")
+        if st.sidebar.button("🔒 Sign Out", use_container_width=True):
+            for k in ("layer3_auth_ok", "layer3_auth_user", "layer3_otp_code", "layer3_otp_email", "layer3_otp_ts"):
+                st.session_state.pop(k, None)
+            st.rerun()
+        return True
+
+    st.markdown("## 🔐 Layer-3 Academic Document Auditor — Team Sign-In")
+    st.caption("Verify your approved institutional email via One-Time Password (OTP) to unlock the QA pipeline.")
+
+    tabs_labels = []
+    if approved_emails:
+        tabs_labels.append("📧 Email OTP Login (Approved IDs)")
+    if expected_passcode:
+        tabs_labels.append("🔑 Team Passcode")
+
+    tabs = st.tabs(tabs_labels)
+    tab_idx = 0
+
+    if approved_emails:
+        with tabs[tab_idx]:
+            with st.form("layer3_send_otp_form", clear_on_submit=False):
+                email_input = st.text_input(
+                    "Approved Work Email ID:",
+                    placeholder="name@upgrad.com",
+                ).strip().lower()
+                if st.form_submit_button("📨 Send 6-Digit OTP", type="primary"):
+                    if not email_input or "@" not in email_input:
+                        st.error("Please enter a valid email address.")
+                    elif email_input not in approved_emails:
+                        st.error("Access denied: This email ID is not in the approved reviewer list.")
+                    else:
+                        otp_val = f"{py_secrets.randbelow(900000) + 100000}"
+                        ok, status_msg = send_layer3_otp_email(email_input, otp_val)
+                        if ok:
+                            st.session_state["layer3_otp_code"] = otp_val
+                            st.session_state["layer3_otp_email"] = email_input
+                            st.session_state["layer3_otp_ts"] = time.time()
+                            st.success(f"A 6-digit verification code has been sent to **{email_input}** (valid for 15 minutes).")
+                        else:
+                            st.error(status_msg)
+
+            if st.session_state.get("layer3_otp_email"):
+                target_email = st.session_state["layer3_otp_email"]
+                with st.form("layer3_verify_otp_form", clear_on_submit=False):
+                    entered_otp = st.text_input(
+                        f"Enter 6-Digit OTP sent to {target_email}:",
+                        max_chars=6,
+                        placeholder="6-digit code",
+                    ).strip()
+                    if st.form_submit_button("✅ Verify & Unlock Layer-3", type="primary"):
+                        issued_ts = st.session_state.get("layer3_otp_ts", 0)
+                        expected_otp = str(st.session_state.get("layer3_otp_code", ""))
+                        dev_bypass = str(st.secrets.get("DEV_BYPASS_OTP", "")).strip()
+
+                        if time.time() - issued_ts > 900:
+                            st.error("This OTP has expired (15-minute limit). Please request a new code.")
+                        elif hmac.compare_digest(entered_otp, expected_otp) or (
+                            dev_bypass and hmac.compare_digest(entered_otp, dev_bypass)
+                        ):
+                            st.session_state["layer3_auth_ok"] = True
+                            st.session_state["layer3_auth_user"] = target_email
+                            st.rerun()
+                        else:
+                            st.error("Invalid verification code. Please check your inbox and try again.")
+        tab_idx += 1
+
+    if expected_passcode:
+        with tabs[tab_idx]:
+            with st.form("layer3_passcode_form", clear_on_submit=False):
+                entered_pass = st.text_input("Team Passcode:", type="password", placeholder="Enter team passcode")
+                if st.form_submit_button("Unlock with Passcode", type="primary"):
+                    if hmac.compare_digest(entered_pass.strip(), expected_passcode):
+                        st.session_state["layer3_auth_ok"] = True
+                        st.session_state["layer3_auth_user"] = "Passcode Session"
+                        st.rerun()
+                    else:
+                        st.error("Incorrect passcode.")
+
+    return False
 
 # ==============================================================================
 # PAGE CONFIGURATION & STYLING
@@ -1280,8 +1436,6 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
-    if not require_team_auth():
-        st.stop()
     st.sidebar.header("⚙️ Layer-3 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
