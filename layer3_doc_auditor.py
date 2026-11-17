@@ -1043,7 +1043,7 @@ def build_deterministic_fallback_report(
         rep["technical_errors_summary"] = "Narrative/structural review completed (SLM format)."
         rep["clarity_issues"] = [{"item_ref": "Narrative Flow", "issue": "Baseline structural clarity verified; re-run with live AI for paragraph-level editorial critique."}]
         rep["priority_fixes"] = [
-            "Re-run audit once AI server load clears (or select gemini-2.5-flash / Claude) for deep SME verification.",
+            "Re-run audit in 30 seconds once peak server load clears (or switch to Anthropic Claude in the sidebar) for deep SME verification.",
             "Confirm every syllabus unit has explicit learning objectives and summary takeaways.",
         ]
         rep["projected_score_after_fixes"] = "95%"
@@ -1248,16 +1248,40 @@ def run_multi_provider_layer3_audit(
         f"=== MANUSCRIPT CONTENT ===\n{ms_context}"
     )
 
-    if provider == "Google Gemini":
-        candidate_models = []
-        for m in [model_id, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]:
-            if m and m != "gemini-2.0-flash" and m not in candidate_models:
-                candidate_models.append(m)
-    else:
-        candidate_models = [model_id, model_id]
+    def _discover_live_gemini_models(key: str, primary: str) -> list:
+        import urllib.request
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={key.strip()}"
+            with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            live = []
+            for m in data.get("models", []):
+                name = m.get("name", "").replace("models/", "")
+                if "generateContent" not in m.get("supportedGenerationMethods", []) or not name:
+                    continue
+                low = name.lower()
+                if any(s in low for s in ("embedding", "imagen", "veo", "tts", "audio", "robotics", "computer-use", "aqa", "bisect")):
+                    continue
+                if "gemini" in low and name != primary:
+                    live.append(name)
+            flash = sorted([x for x in live if "flash" in x and "lite" not in x], reverse=True)
+            lite = sorted([x for x in live if "flash-lite" in x], reverse=True)
+            pro = sorted([x for x in live if "pro" in x], reverse=True)
+            ordered = []
+            for item in flash + lite + pro:
+                if item not in ordered:
+                    ordered.append(item)
+            return ordered[:3]
+        except Exception:
+            return []
 
+    candidate_models = [model_id, model_id]
+    discovered = False
     all_errs = []
-    for attempt, active_model in enumerate(candidate_models):
+    idx = 0
+
+    while idx < len(candidate_models):
+        active_model = candidate_models[idx]
         try:
             if provider == "Google Gemini":
                 parsed = call_gemini_rest(api_key.strip(), active_model, system_instruction, user_prompt)
@@ -1272,7 +1296,12 @@ def run_multi_provider_layer3_audit(
             return parsed
         except Exception as exc:
             all_errs.append(f"[{active_model}] {str(exc)[:110]}")
-            time.sleep(1.5 * (attempt + 1))
+            idx += 1
+            if idx == len(candidate_models) and provider == "Google Gemini" and not discovered:
+                discovered = True
+                candidate_models.extend(_discover_live_gemini_models(api_key, model_id))
+            time.sleep(2.5 * min(idx, 3))
+
     last_err = " | ".join(all_errs)
 
     return build_deterministic_fallback_report(
