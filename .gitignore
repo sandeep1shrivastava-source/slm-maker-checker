@@ -15,3 +15,6 @@ __pycache__/
 pending_otps.json 
 *.xlsx 
 *.pdf 
+
+.streamlit/oauth_client.json
+.streamlit/oauth_token.json
