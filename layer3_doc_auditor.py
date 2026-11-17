@@ -51,9 +51,7 @@ def send_layer3_otp_email(recipient_email: str, otp_code: str) -> tuple[bool, st
     smtp_port = int(st.secrets.get("SMTP_PORT", 587))
     smtp_user = str(
         st.secrets.get("SMTP_USER")
-        or if not approved and not passcode:
-    st.error("Access locked: Configure APPROVED_EMAILS in Streamlit Secrets.")
-    return False
+        or st.error("Access locked: Configure APPROVED_EMAILS in Streamlit Secrets.")
         or st.secrets.get("EMAIL_USER")
         or ""
     ).strip()
