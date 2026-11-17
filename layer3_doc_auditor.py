@@ -1571,7 +1571,7 @@ def main():
             st.warning(f"**Step 2: Connect Google Drive** — {gcp_status_msg}")
             if oauth_login_url:
                 st.markdown(
-                    f'<a href="{oauth_login_url}" target="_self" style="display:inline-block;padding:0.55rem 1.1rem;'
+                    f'<a href="{oauth_login_url}" target="_top" style="display:inline-block;padding:0.55rem 1.1rem;'
                     f'background-color:#ff4b4b;color:#ffffff;font-weight:600;border-radius:6px;text-decoration:none;">'
                     f'🔐 Sign In with Google Email to Connect Drive</a>',
                     unsafe_allow_html=True,
