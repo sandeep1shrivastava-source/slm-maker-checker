@@ -288,7 +288,7 @@ def _extract_oauth_secret_dict() -> dict:
 
 
 def get_gcp_services():
-    """Supports Personal Google OAuth (via secrets.toml or local JSON) and GCP Service Account."""
+    """Returns (drive_svc, sheets_svc, account_label, status_msg, oauth_login_url)."""
     auth_mode = st.sidebar.radio(
         "Google Drive Authentication Mode:",
         options=[
@@ -304,20 +304,22 @@ def get_gcp_services():
         token_path = os.path.join(".streamlit", "oauth_token.json")
         client_secret_path = os.path.join(".streamlit", "oauth_client.json")
         secret_oauth = _extract_oauth_secret_dict()
+        diag_notes = []
 
         if st.session_state.get("gcp_oauth_creds_json"):
             try:
                 creds = Credentials.from_authorized_user_info(
                     json.loads(st.session_state["gcp_oauth_creds_json"]), GCP_SCOPES
                 )
-            except Exception:
+            except Exception as exc:
+                diag_notes.append(f"Session token error: {exc}")
                 creds = None
 
         if creds is None and secret_oauth.get("refresh_token"):
             try:
                 creds = Credentials.from_authorized_user_info(secret_oauth, GCP_SCOPES)
             except Exception as exc:
-                st.sidebar.warning(f"OAuth secret load error: {exc}")
+                diag_notes.append(f"Secrets token error: {exc}")
                 creds = None
 
         if creds is None and os.path.exists(token_path):
@@ -334,7 +336,7 @@ def get_gcp_services():
                     with open(token_path, "w", encoding="utf-8") as tf:
                         tf.write(creds.to_json())
             except Exception as exc:
-                st.sidebar.warning(f"Saved OAuth token expired ({exc}). Click Sign In below.")
+                diag_notes.append(f"Saved Google OAuth refresh token expired or revoked ({exc}).")
                 creds = None
 
         if not creds or not creds.valid:
@@ -363,22 +365,15 @@ def get_gcp_services():
                         st.rerun()
                     except Exception as exc:
                         st.query_params.clear()
-                        st.sidebar.error(f"Google OAuth sign-in failed: {exc}")
-                        return None, None, ""
+                        return None, None, "", f"Google OAuth sign-in failed: {exc}", ""
 
                 auth_url, _ = flow.authorization_url(
                     access_type="offline",
                     include_granted_scopes="true",
                     prompt="consent",
                 )
-                st.sidebar.link_button(
-                    "🔐 Sign In with Google Account",
-                    auth_url,
-                    type="primary",
-                    use_container_width=True,
-                )
-                st.info("Click **Sign In with Google Account** in the left sidebar to unlock the audit pipeline.")
-                return None, None, ""
+                reason = " ".join(diag_notes) if diag_notes else "Google Drive is not signed in yet."
+                return None, None, "", reason, auth_url
 
             if os.path.exists(client_secret_path):
                 if st.sidebar.button("🔐 Sign In with My Google Account", type="primary"):
@@ -388,10 +383,13 @@ def get_gcp_services():
                     with open(token_path, "w", encoding="utf-8") as tf:
                         tf.write(creds.to_json())
                     st.rerun()
-                return None, None, ""
+                return None, None, "", "Click 'Sign In with My Google Account' in the sidebar.", ""
 
-            st.sidebar.warning("Add client_id and client_secret under [gcp_user_oauth] in Streamlit Secrets.")
-            return None, None, ""
+            missing_msg = (
+                " ".join(diag_notes)
+                + " `[gcp_user_oauth]` in Streamlit Secrets is missing `client_id` / `client_secret`."
+            ).strip()
+            return None, None, "", missing_msg, ""
 
         with st.sidebar.expander("☁️ Streamlit Cloud OAuth Token (TOML)", expanded=False):
             tok_data = json.loads(creds.to_json())
@@ -402,19 +400,20 @@ def get_gcp_services():
             build("drive", "v3", credentials=creds, cache_discovery=False),
             build("sheets", "v4", credentials=creds, cache_discovery=False),
             "Personal Google Account (OAuth Active)",
+            "",
+            "",
         )
 
     if "gcp_service_account" in st.secrets:
         raw_sec = dict(st.secrets["gcp_service_account"])
         if str(raw_sec.get("private_key", "")).strip().startswith("-----BEGIN"):
             try:
-                return build_clients_from_service_account(raw_sec)
+                d_svc, s_svc, email = build_clients_from_service_account(raw_sec)
+                return d_svc, s_svc, email, "", ""
             except Exception as exc:
-                st.error(f"GCP Service Account error: {exc}")
-                return None, None, ""
+                return None, None, "", f"GCP Service Account error: {exc}", ""
 
-    st.error("Configure `gcp_service_account` in Streamlit Secrets or switch to 'My Google Account (OAuth)'.")
-    return None, None, ""
+    return None, None, "", "Configure `gcp_service_account` in Streamlit Secrets or use My Google Account (OAuth).", ""
 
 
 # ==============================================================================
@@ -1566,7 +1565,7 @@ def main():
     )
     dest_folder_id = extract_drive_id(dest_folder_input)
 
-    drive_svc, sheets_svc, sa_email = get_gcp_services()
+    drive_svc, sheets_svc, sa_email, gcp_status_msg, oauth_login_url = get_gcp_services()
 
     if sa_email and "@" in sa_email:
         st.sidebar.divider()
@@ -1580,7 +1579,16 @@ def main():
     )
 
     if drive_svc is None or sheets_svc is None:
-        st.stop()
+        with st.container(border=True):
+            st.warning(f"**Google Drive & Sheets Not Connected:** {gcp_status_msg}")
+            if oauth_login_url:
+                st.link_button("🔐 Sign In with Google Account", oauth_login_url, type="primary")
+            st.caption(
+                "Tip: You can still run **Quick Single-File Audit** below using local file uploads, "
+                "or switch to **GCP Service Account** in the left sidebar."
+            )
+    else:
+        st.success(f"✅ Connected: **{sa_email}**")
 
     work_mode = st.radio(
         "Select Workflow Mode:",
@@ -1693,6 +1701,10 @@ def main():
     # ==========================================================================
     # WORKFLOW A: MASTER TRACKER BATCH PIPELINE (GOOGLE SHEETS / DRIVE EXCEL)
     # ==========================================================================
+    if drive_svc is None or sheets_svc is None:
+        st.info("Connect Google Drive above (or select GCP Service Account in the sidebar) to scan a Master Tracker Google Sheet.")
+        st.stop()
+
     st.subheader("Step 1: Connect Master Tracker (Live Google Sheet or Drive Excel)")
     tracker_url = st.text_input(
         "Paste Google Sheet or Drive Excel URL:",
