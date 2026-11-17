@@ -1304,6 +1304,61 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
         r_note.font.size = Pt(9.5)
         r_note.font.color.rgb = RGBColor(71, 85, 105)
 
+    # UGC & AI Compliance Badges
+    ugc_plag = audit_data.get("ugc_plagiarism_level")
+    ai_idx = audit_data.get("ai_index_verdict")
+    if ugc_plag or ai_idx:
+        doc_obj.add_heading("UGC & AI Compliance", level=2)
+        p_comp = doc_obj.add_paragraph()
+        if ugc_plag:
+            p_comp.add_run(f"Plagiarism / Similarity: {ugc_plag}\n")
+        if ai_idx:
+            p_comp.add_run(f"AI Generation Index: {ai_idx}\n")
+        checker = audit_data.get("checker_independent_audit")
+        if checker:
+            p_comp.add_run(f"Independent Checker Audit: {checker}")
+
+    # Layer-2 SLM Matrix
+    slm_matrix = audit_data.get("layer2_slm_matrix", [])
+    if slm_matrix:
+        doc_obj.add_heading("UGC 12-Parameter SLM Rubric", level=2)
+        slm_rows = [
+            [
+                str(x.get("param_no", "")),
+                str(x.get("dimension", "")),
+                f"{x.get('score_achieved', '')} / {x.get('weight', '')}",
+                str(x.get("findings", ""))
+            ]
+            for x in slm_matrix
+        ]
+        add_styled_table(
+            doc_obj,
+            headers=["#", "Parameter Dimension", "Score", "Findings"],
+            rows=slm_rows,
+            col_widths=[0.4, 2.0, 0.8, 3.8],
+        )
+
+    # Layer-2 MCQ Matrix
+    mcq_matrix = audit_data.get("layer2_mcq_defects", [])
+    if mcq_matrix:
+        doc_obj.add_heading("7-Rule Psychometric MCQ Deductions", level=2)
+        mcq_rows = [
+            [
+                str(x.get("Item_ID", "")),
+                str(x.get("Tab_Category", "")),
+                str(x.get("Severity", "")),
+                str(x.get("Deduction", "")),
+                str(x.get("Defect_Description", ""))
+            ]
+            for x in mcq_matrix
+        ]
+        add_styled_table(
+            doc_obj,
+            headers=["Item", "Category", "Severity", "Deduct", "Description"],
+            rows=mcq_rows,
+            col_widths=[0.7, 1.5, 1.0, 0.7, 3.1],
+        )
+
     # Score Breakdown
     doc_obj.add_heading("Score breakdown", level=2)
     sb_rows = []
