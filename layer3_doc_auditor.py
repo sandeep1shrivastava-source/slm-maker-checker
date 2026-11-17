@@ -192,7 +192,7 @@ st.set_page_config(
 )
 
 import streamlit as st
-from layer3_auth import require_team_auth  # match your function name in layer3_auth.py
+from layer3_auth import require_team_auth, get_current_auth_token  # match your function name in layer3_auth.py
 
 st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
 
@@ -361,16 +361,17 @@ def get_gcp_services():
                         flow.fetch_token(code=auth_code)
                         creds = flow.credentials
                         st.session_state["gcp_oauth_creds_json"] = creds.to_json()
-                        st.query_params.clear()
+                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"): st.query_params.pop(_qp, None)
                         st.rerun()
                     except Exception as exc:
-                        st.query_params.clear()
+                        for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"): st.query_params.pop(_qp, None)
                         return None, None, "", f"Google OAuth sign-in failed: {exc}", ""
 
                 auth_url, _ = flow.authorization_url(
                     access_type="offline",
                     include_granted_scopes="true",
                     prompt="consent",
+                    state=get_current_auth_token(),
                 )
                 reason = " ".join(diag_notes) if diag_notes else "Google Drive is not signed in yet."
                 return None, None, "", reason, auth_url
