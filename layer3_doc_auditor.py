@@ -1140,113 +1140,36 @@ def run_multi_provider_layer3_audit(
     ai_cv: float,
 ) -> dict:
     """
-    Routes the audit prompt to Google Gemini, OpenAI (ChatGPT), Anthropic (Claude),
-    or Deterministic Rule Engine while enforcing the exact publication-grade QA report schema.
+    Routes the audit prompt to Google Gemini (with multi-key pool rotation),
+    OpenAI (ChatGPT), Anthropic (Claude), or Deterministic Rule Engine while
+    enforcing the unified Layer-2 + Layer-3 QA report schema.
     """
-    if provider.startswith("Deterministic") or not api_key.strip():
-        note = "" if provider.startswith("Deterministic") else f"No API key supplied for {provider}; ran deterministic fallback"
-        return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()), note)
-
-    ms_context = prepare_manuscript_context(manuscript_text, max_chars=92000)
-    syl_context = syllabus_text[:28000] if syllabus_text.strip() else "NO SYLLABUS PROVIDED."
-
-    deterministic_notes = json.dumps(
-        {
-            "total_questions_detected": mcq_stats.get("total_questions", 0),
-            "script_technical_summary": mcq_stats.get("summary_line", ""),
-            "script_technical_mismatches": mcq_stats.get("technical_mismatches", [])[:15],
-            "script_duplicate_candidates": mcq_stats.get("duplicate_pairs", [])[:25],
-            "script_syllabus_mentions": mcq_stats.get("syllabus_mentions", [])[:10],
-            "script_where_when_stems": mcq_stats.get("where_when_stems", [])[:25],
-            "has_unit_column": mcq_stats.get("has_unit_column", False),
-            "ugc_ai_burstiness_cv": ai_cv,
-        },
-        indent=2,
-    )
-
-    system_instruction = f"""You are a Senior Academic Quality Assurance Auditor & Subject Matter Expert evaluating higher-education instructional content ({fmt} format) against UGC 2018 quality standards and psychometric best practices.
-
-    Produce a rigorous, comprehensive, item-by-item QA audit report in STRICT JSON matching the exact schema below.
-
-    === LAYER-2 & LAYER-3 INTEGRATED RUBRIC ===
-    If the format is an SLM, Module, Theory, or Word Document, apply the UGC 12-Parameter Rubric (Total 100 marks):
-    1. Syllabus & Curriculum Mapping (max 10)
-    2. Instructional Design & Structure (max 10)
-    3. Conceptual Depth & Academic Rigor (max 10)
-    4. Language, Tone & Editorial Clarity (max 8)
-    5. Real-world Examples & Caselets (max 8)
-    6. Self-Assessment & In-Text Exercises (max 8)
-    7. Summaries, Keywords & Key Takeaways (max 6)
-    8. References, Citations & Plagiarism Checks (max 8)
-    9. Formatting, Typography & Presentation (max 8)
-    10. Visual Diagrams, Tables & Graphical Quality (max 8)
-    11. Pedagogical Alignment & Intended LOs (max 8)
-    12. Legal, Ethical & Sensitivity Standards (max 8)
-
-    If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Deduction Engine (Start at 100, deduct per defect):
-    1. Stem Quality & Clarity [-2.0]
-    2. Distractor Plausibility [-2.0]
-    3. Answer Key Accuracy [-5.0]
-    4. Explanation & Rationale Depth [-2.0]
-    5. Bloom's Taxonomy Alignment [-2.0]
-    6. Difficulty Calibration [-1.0]
-    7. Formatting & Schema Uniformity [-1.0]
-
-    === MANDATORY REPORTING RULES ===
-    1. PRESERVE ALL foundational Layer-3 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
-    2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
-    3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
-    4. Base the `overall_score` firmly on the rigorous Layer-2 calculation.
-
-    Return ONLY valid JSON with these exact keys:
-    {{
-      "report_title": "QA Report: {subject} {fmt} ({mcq_stats.get('total_questions') or 'Document'} items)",
-      "overall_score": 82,
-      "executive_verdict": "Concise 2-3 sentence summary of key strengths, main defect count, and syllabus unit coverage.",
-      "row_numbering_note": "Question numbers below follow the order in the sheet, so Q1 is sheet row 2.",
-      
-      "ugc_plagiarism_level": "Level 0: Acceptable (Estimated based on text integrity)",
-      "ai_index_verdict": "Pass (<20% estimated AI)",
-      "checker_independent_audit": "True",
-      
-      "layer2_slm_matrix": [
-        {{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.5, "weight": 10, "findings": "...", "remediation": "..."}}
-      ],
-      "layer2_mcq_defects": [
-        {{"Item_ID": "Q1", "Tab_Category": "Distractor Plausibility", "Severity": "Moderate", "Defect_Description": "...", "Deduction": 2.0}}
-      ],
-
-      "score_breakdown": [
-        {{"criteria": "Subject knowledge / factual errors", "max_deduction": "-30%", "deducted": "-2%", "finding": "..."}},
-        {{"criteria": "Technical errors (letter vs answer mismatch)", "max_deduction": "-30%", "deducted": "0%", "finding": "..."}},
-        {{"criteria": "Clarity & repetition", "max_deduction": "-20%", "deducted": "-14%", "finding": "..."}},
-        {{"criteria": "Grammar & semantics", "max_deduction": "-10%", "deducted": "-2%", "finding": "..."}},
-        {{"criteria": "Subject mismatch", "max_deduction": "-10%", "deducted": "0%", "finding": "..."}}
-      ],
-      "subject_knowledge_issues": [{{"item_ref": "Q13", "issue": "...", "suggestion": "..."}}],
-      "technical_errors_summary": "None. All letters match.",
-      "technical_error_items": [],
-      "repetition_groups": [{{"concept": "Concept name", "items": "Q6, Q11", "delete_items": "Q11"}}],
-      "high_frequency_clusters": ["Interoperability: Q125, Q126, Q131, Q143, Q157, Q160"],
-      "clarity_issues": [{{"item_ref": "Q77", "issue": "..."}}],
-      "grammar_issues": [{{"item_ref": "Q68", "issue": "...", "fix": "..."}}],
-      "subject_relevance_verdict": "All items are relevant to {subject}.",
-      "syllabus_mapping_status": "Partly mapped",
-      "syllabus_mapping_note": "The sheet has no Unit column, so units were mapped from question blocks.",
-      "syllabus_mapping": [{{"unit": "1", "topic": "Unit Title", "items_covered": "—", "status": "❌ Not covered"}}],
-      "mapping_verdict": "Detailed coverage calculation and cross-unit overlap guidance.",
-      "priority_fixes": ["Delete redundant items.", "Fix flagged grammar.", "Add a Unit column."],
-      "projected_score_after_fixes": "95%"
-    }}"""
-
-    user_prompt = (
-        f"SUBJECT: {subject}\n"
-        f"TOPIC / MODULE: {topic}\n"
-        f"DELIVERABLE FORMAT: {fmt}\n\n"
-        f"=== DETERMINISTIC SCRIPT VERIFICATION ===\n{deterministic_notes}\n\n"
-        f"=== SYLLABUS CONTENT ===\n{syl_context}\n\n"
-        f"=== MANUSCRIPT CONTENT ===\n{ms_context}"
-    )
+    def _collect_key_pool(passed: str) -> list:
+        raw = []
+        if passed:
+            raw.extend(re.split(r"[\s,;]+", str(passed).strip()))
+        if provider == "Google Gemini":
+            try:
+                sec_pool = st.secrets.get("GEMINI_API_KEYS", [])
+                if isinstance(sec_pool, str):
+                    raw.extend(re.split(r"[\s,;]+", sec_pool.strip()))
+                elif isinstance(sec_pool, (list, tuple)):
+                    for item in sec_pool:
+                        raw.extend(re.split(r"[\s,;]+", str(item).strip()))
+            except Exception:
+                pass
+            try:
+                sec_single = st.secrets.get("GEMINI_API_KEY", "")
+                if sec_single:
+                    raw.extend(re.split(r"[\s,;]+", str(sec_single).strip()))
+            except Exception:
+                pass
+        pool = []
+        for k in raw:
+            cleaned = k.strip().strip('"').strip("'")
+            if cleaned and cleaned not in pool:
+                pool.append(cleaned)
+        return pool
 
     def _discover_live_gemini_models(key: str, primary: str) -> list:
         import urllib.request
@@ -1264,45 +1187,158 @@ def run_multi_provider_layer3_audit(
                     continue
                 if "gemini" in low and name != primary:
                     live.append(name)
-            flash = sorted([x for x in live if "flash" in x and "lite" not in x], reverse=True)
             lite = sorted([x for x in live if "flash-lite" in x], reverse=True)
+            flash = sorted([x for x in live if "flash" in x and "lite" not in x], reverse=True)
             pro = sorted([x for x in live if "pro" in x], reverse=True)
             ordered = []
-            for item in flash + lite + pro:
+            for item in lite + flash + pro:
                 if item not in ordered:
                     ordered.append(item)
-            return ordered[:3]
+            return ordered[:2]
         except Exception:
             return []
 
-    candidate_models = [model_id, model_id]
-    discovered = False
+    key_pool = _collect_key_pool(api_key)
+    if provider.startswith("Deterministic") or not key_pool:
+        note = "" if provider.startswith("Deterministic") else f"No API key supplied for {provider}; ran deterministic fallback"
+        return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()), note)
+
+    ms_context = prepare_manuscript_context(manuscript_text, max_chars=45000)
+    syl_context = syllabus_text[:12000] if syllabus_text.strip() else "NO SYLLABUS PROVIDED."
+
+    deterministic_notes = json.dumps(
+        {
+            "total_questions_detected": mcq_stats.get("total_questions", 0),
+            "script_technical_summary": mcq_stats.get("summary_line", ""),
+            "script_technical_mismatches": mcq_stats.get("technical_mismatches", [])[:15],
+            "script_duplicate_candidates": mcq_stats.get("duplicate_pairs", [])[:25],
+            "script_syllabus_mentions": mcq_stats.get("syllabus_mentions", [])[:10],
+            "script_where_when_stems": mcq_stats.get("where_when_stems", [])[:25],
+            "has_unit_column": mcq_stats.get("has_unit_column", False),
+            "ugc_ai_burstiness_cv": ai_cv,
+        },
+        indent=2,
+    )
+
+    system_instruction = f"""You are a Senior Academic Quality Assurance Auditor & Subject Matter Expert evaluating higher-education instructional content ({fmt} format) against UGC 2018 quality standards and psychometric best practices.
+
+Produce a rigorous, comprehensive, item-by-item QA audit report in STRICT JSON matching the exact schema below.
+
+=== LAYER-2 & LAYER-3 INTEGRATED RUBRIC ===
+If the format is an SLM, Module, Theory, or Word Document, apply the UGC 12-Parameter Rubric (Total 100 marks):
+1. Syllabus & Curriculum Mapping (max 10)
+2. Instructional Design & Structure (max 10)
+3. Conceptual Depth & Academic Rigor (max 10)
+4. Language, Tone & Editorial Clarity (max 8)
+5. Real-world Examples & Caselets (max 8)
+6. Self-Assessment & In-Text Exercises (max 8)
+7. Summaries, Keywords & Key Takeaways (max 6)
+8. References, Citations & Plagiarism Checks (max 8)
+9. Formatting, Typography & Presentation (max 8)
+10. Visual Diagrams, Tables & Graphical Quality (max 8)
+11. Pedagogical Alignment & Intended LOs (max 8)
+12. Legal, Ethical & Sensitivity Standards (max 8)
+
+If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Deduction Engine (Start at 100, deduct per defect):
+1. Stem Quality & Clarity [-2.0]
+2. Distractor Plausibility [-2.0]
+3. Answer Key Accuracy [-5.0]
+4. Explanation & Rationale Depth [-2.0]
+5. Bloom's Taxonomy Alignment [-2.0]
+6. Difficulty Calibration [-1.0]
+7. Formatting & Schema Uniformity [-1.0]
+
+=== MANDATORY REPORTING RULES ===
+1. PRESERVE ALL foundational Layer-3 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
+2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
+3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
+4. Base `overall_score` firmly on the rigorous Layer-2 calculation.
+
+Return ONLY valid JSON with these exact keys:
+{{
+  "report_title": "QA Report: {subject} {fmt} ({mcq_stats.get('total_questions') or 'Document'} items)",
+  "overall_score": 82,
+  "executive_verdict": "Concise 2-3 sentence summary of key strengths, main defect count, and syllabus unit coverage.",
+  "row_numbering_note": "Question numbers below follow the order in the sheet, so Q1 is sheet row 2.",
+  "ugc_plagiarism_level": "Level 0: Acceptable (Estimated based on text integrity)",
+  "ai_index_verdict": "Pass (<20% estimated AI)",
+  "checker_independent_audit": "True",
+  "layer2_slm_matrix": [
+    {{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.5, "weight": 10, "findings": "...", "remediation": "..."}}
+  ],
+  "layer2_mcq_defects": [
+    {{"Item_ID": "Q1", "Tab_Category": "Distractor Plausibility", "Severity": "Moderate", "Defect_Description": "...", "Deduction": 2.0}}
+  ],
+  "score_breakdown": [
+    {{"criteria": "Subject knowledge / factual errors", "max_deduction": "-30%", "deducted": "-2%", "finding": "..."}},
+    {{"criteria": "Technical errors (letter vs answer mismatch)", "max_deduction": "-30%", "deducted": "0%", "finding": "..."}},
+    {{"criteria": "Clarity & repetition", "max_deduction": "-20%", "deducted": "-14%", "finding": "..."}},
+    {{"criteria": "Grammar & semantics", "max_deduction": "-10%", "deducted": "-2%", "finding": "..."}},
+    {{"criteria": "Subject mismatch", "max_deduction": "-10%", "deducted": "0%", "finding": "..."}}
+  ],
+  "subject_knowledge_issues": [{{"item_ref": "Q13", "issue": "...", "suggestion": "..."}}],
+  "technical_errors_summary": "None. All letters match.",
+  "technical_error_items": [],
+  "repetition_groups": [{{"concept": "Concept name", "items": "Q6, Q11", "delete_items": "Q11"}}],
+  "high_frequency_clusters": ["Interoperability: Q125, Q126, Q131, Q143, Q157, Q160"],
+  "clarity_issues": [{{"item_ref": "Q77", "issue": "..."}}],
+  "grammar_issues": [{{"item_ref": "Q68", "issue": "...", "fix": "..."}}],
+  "subject_relevance_verdict": "All items are relevant to {subject}.",
+  "syllabus_mapping_status": "Partly mapped",
+  "syllabus_mapping_note": "The sheet has no Unit column, so units were mapped from question blocks.",
+  "syllabus_mapping": [{{"unit": "1", "topic": "Unit Title", "items_covered": "—", "status": "❌ Not covered"}}],
+  "mapping_verdict": "Detailed coverage calculation and cross-unit overlap guidance.",
+  "priority_fixes": ["Delete redundant items.", "Fix flagged grammar.", "Add a Unit column."],
+  "projected_score_after_fixes": "95%"
+}}"""
+
+    user_prompt = (
+        f"SUBJECT: {subject}\n"
+        f"TOPIC / MODULE: {topic}\n"
+        f"DELIVERABLE FORMAT: {fmt}\n\n"
+        f"=== DETERMINISTIC SCRIPT VERIFICATION ===\n{deterministic_notes}\n\n"
+        f"=== SYLLABUS CONTENT ===\n{syl_context}\n\n"
+        f"=== MANUSCRIPT CONTENT ===\n{ms_context}"
+    )
+
     all_errs = []
-    idx = 0
+    for key_idx, active_key in enumerate(key_pool, start=1):
+        models_to_try = [model_id]
+        discovered = False
+        m_idx = 0
 
-    while idx < len(candidate_models):
-        active_model = candidate_models[idx]
-        try:
-            if provider == "Google Gemini":
-                parsed = call_gemini_rest(api_key.strip(), active_model, system_instruction, user_prompt)
-            elif provider == "OpenAI (ChatGPT)":
-                parsed = call_openai_rest(api_key.strip(), active_model, system_instruction, user_prompt)
-            elif provider == "Anthropic (Claude)":
-                parsed = call_anthropic_rest(api_key.strip(), active_model, system_instruction, user_prompt)
-            else:
-                return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()))
+        while m_idx < len(models_to_try):
+            active_model = models_to_try[m_idx]
+            try:
+                if provider == "Google Gemini":
+                    parsed = call_gemini_rest(active_key, active_model, system_instruction, user_prompt)
+                elif provider == "OpenAI (ChatGPT)":
+                    parsed = call_openai_rest(active_key, active_model, system_instruction, user_prompt)
+                elif provider == "Anthropic (Claude)":
+                    parsed = call_anthropic_rest(active_key, active_model, system_instruction, user_prompt)
+                else:
+                    return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()))
 
-            parsed["_ai_provider_used"] = f"{provider} ({active_model})"
-            return parsed
-        except Exception as exc:
-            all_errs.append(f"[{active_model}] {str(exc)[:110]}")
-            idx += 1
-            if idx == len(candidate_models) and provider == "Google Gemini" and not discovered:
-                discovered = True
-                candidate_models.extend(_discover_live_gemini_models(api_key, model_id))
-            time.sleep(2.5 * min(idx, 3))
+                key_tag = f" | Key #{key_idx}" if len(key_pool) > 1 else ""
+                parsed["_ai_provider_used"] = f"{provider} ({active_model}{key_tag})"
+                return parsed
+            except Exception as exc:
+                err_txt = str(exc)
+                all_errs.append(f"[Key#{key_idx}/{active_model}] {err_txt[:95]}")
 
-    last_err = " | ".join(all_errs)
+                # Rotate immediately to next API key on quota exhaustion (429) or invalid key (400/403)
+                if any(tok in err_txt for tok in ("429", "RESOURCE_EXHAUSTED", "quota", "API_KEY_INVALID", "403")):
+                    break
+
+                # Retry once on temporary 503 high demand before trying other models on this key
+                if "503" in err_txt and models_to_try.count(active_model) < 2:
+                    models_to_try.insert(m_idx + 1, active_model)
+                m_idx += 1
+
+                if m_idx == len(models_to_try) and provider == "Google Gemini" and not discovered:
+                    discovered = True
+                    models_to_try.extend(_discover_live_gemini_models(active_key, model_id))
+                time.sleep(1.5)
 
     return build_deterministic_fallback_report(
         title,
@@ -1310,7 +1346,7 @@ def run_multi_provider_layer3_audit(
         mcq_stats,
         ai_cv,
         bool(syllabus_text.strip()),
-        warning_note=f"{provider} fallback triggered: {last_err[:320]}",
+        warning_note=f"{provider} fallback triggered: {' | '.join(all_errs)[:320]}",
     )
 
 
