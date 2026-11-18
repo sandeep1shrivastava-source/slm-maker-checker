@@ -217,31 +217,50 @@ def classify_audit_decision(overall_score: float, ai_verdict: str = "", plag_ver
         return "Minor Changes"
     return "Approved"
 
+def _load_saved_thresholds() -> dict:
+    """Loads saved threshold defaults from layer4_thresholds_config.json if available."""
+    import json
+    import os
+    defaults = {
+        "approved_min": float(APPROVED_MIN_SCORE),
+        "minor_min": float(MINOR_CHANGES_MIN_SCORE),
+        "max_ai_pct": int(MAX_AI_ALLOWED_PCT),
+        "min_cv": float(MIN_BURSTINESS_CV),
+    }
+    cfg_path = "layer4_thresholds_config.json"
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as cf:
+                saved = json.load(cf)
+            defaults.update({k: saved[k] for k in defaults if k in saved})
+        except Exception:
+            pass
+    return defaults
+
+
 def get_active_thresholds() -> dict:
-    """Reads live sidebar slider values from st.session_state, falling back to module defaults."""
+    """Reads live sidebar slider values from st.session_state, falling back to saved/module defaults."""
+    base = _load_saved_thresholds()
     try:
         ss = st.session_state
         return {
-            "approved_min": float(ss.get("cfg_approved_min", APPROVED_MIN_SCORE)),
-            "minor_min": float(ss.get("cfg_minor_min", MINOR_CHANGES_MIN_SCORE)),
-            "max_ai_pct": int(ss.get("cfg_max_ai_pct", MAX_AI_ALLOWED_PCT)),
-            "min_cv": float(ss.get("cfg_min_cv", MIN_BURSTINESS_CV)),
+            "approved_min": float(ss.get("cfg_approved_min", base["approved_min"])),
+            "minor_min": float(ss.get("cfg_minor_min", base["minor_min"])),
+            "max_ai_pct": int(ss.get("cfg_max_ai_pct", base["max_ai_pct"])),
+            "min_cv": float(ss.get("cfg_min_cv", base["min_cv"])),
         }
     except Exception:
-        return {
-            "approved_min": APPROVED_MIN_SCORE,
-            "minor_min": MINOR_CHANGES_MIN_SCORE,
-            "max_ai_pct": MAX_AI_ALLOWED_PCT,
-            "min_cv": MIN_BURSTINESS_CV,
-        }
+        return base
 
 
 def render_threshold_sidebar():
-    """Renders interactive Approved / Minor / Major and AI percentage sliders in the Streamlit sidebar."""
-    st.session_state.setdefault("cfg_approved_min", float(APPROVED_MIN_SCORE))
-    st.session_state.setdefault("cfg_minor_min", float(MINOR_CHANGES_MIN_SCORE))
-    st.session_state.setdefault("cfg_max_ai_pct", int(MAX_AI_ALLOWED_PCT))
-    st.session_state.setdefault("cfg_min_cv", float(get_active_thresholds()['min_cv']))
+    """Renders interactive & persistent Approved / Minor / Major and AI percentage sliders in the sidebar."""
+    import json
+    saved = _load_saved_thresholds()
+    st.session_state.setdefault("cfg_approved_min", float(saved["approved_min"]))
+    st.session_state.setdefault("cfg_minor_min", float(saved["minor_min"]))
+    st.session_state.setdefault("cfg_max_ai_pct", int(saved["max_ai_pct"]))
+    st.session_state.setdefault("cfg_min_cv", float(saved["min_cv"]))
 
     with st.sidebar.expander("⚙️ Approval & AI Thresholds", expanded=False):
         app_min = st.slider(
@@ -253,89 +272,41 @@ def render_threshold_sidebar():
         )
         if st.session_state["cfg_minor_min"] > app_min:
             st.session_state["cfg_minor_min"] = app_min
-        st.slider(
+        minor_min = st.slider(
             "Minor Changes Min Score (%)",
             min_value=30.0,
             max_value=float(app_min),
             step=1.0,
             key="cfg_minor_min",
         )
-        st.slider(
+        max_ai = st.slider(
             "Max Allowed AI Content (%)",
             min_value=5,
             max_value=80,
             step=5,
             key="cfg_max_ai_pct",
         )
-        st.slider(
+        min_cv = st.slider(
             "Min Burstiness CV (Offline AI)",
             min_value=0.10,
             max_value=0.80,
             step=0.05,
             key="cfg_min_cv",
         )
-
-
-
-st.set_page_config(page_title="Layer-4 Academic Document Auditor", layout="wide")
-
-if not require_team_auth():
-    st.stop()
-
-st.markdown(
-    """
-    <style>
-    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
-    .stButton > button { border-radius: 6px; font-weight: 600; }
-    div[data-testid="stMetricValue"] { font-size: 1.5rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-GCP_SCOPES = [
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/spreadsheets",
-]
-
-AI_PROVIDER_CATALOG = {
-    "Google Gemini": {
-        "secret_key": "GEMINI_API_KEY",
-        "models": [
-            "gemini-3.8-flash",
-            "gemini-4-hydrogen",
-            "gemini-4-argon",
-            "gemini-3.5-flash-lite",
-        ],
-        "help": "Uses Google AI Studio / Gemini API (GEMINI_API_KEY).",
-    },
-    "OpenAI (ChatGPT)": {
-        "secret_key": "OPENAI_API_KEY",
-        "models": [
-            "gpt-6.1-terra",
-            "gpt-6-luna",
-            "gpt-6.1-sol",
-            "gpt-6-astra",
-        ],
-        "help": "Uses OpenAI Chat Completions API (OPENAI_API_KEY).",
-    },
-    "Anthropic (Claude)": {
-        "secret_key": "ANTHROPIC_API_KEY",
-        "models": [
-            "claude-sonnet-5-5",
-            "claude-fable-5-2",
-            "claude-opus-5-5",
-            "claude-haiku-4-5",
-        ],
-        "help": "Uses Anthropic Messages API (ANTHROPIC_API_KEY).",
-    },
-    "Deterministic Python Only (No AI Key)": {
-        "secret_key": "",
-        "models": ["deterministic-rule-engine"],
-        "help": "Runs local Python MCQ key-balance, duplicate stem, and UGC burstiness checks only.",
-    },
-}
-
+        st.caption(
+            f"Active Gates: Approved >= {app_min:.0f}% | Minor {minor_min:.0f}–{app_min - 0.1:.1f}% | "
+            f"Major < {minor_min:.0f}% | AI < {max_ai}%"
+        )
+        if st.button("💾 Save as Default", use_container_width=True, key="btn_save_thresholds"):
+            payload = {
+                "approved_min": float(app_min),
+                "minor_min": float(minor_min),
+                "max_ai_pct": int(max_ai),
+                "min_cv": float(min_cv),
+            }
+            with open("layer4_thresholds_config.json", "w", encoding="utf-8") as cf:
+                json.dump(payload, cf, indent=2)
+            st.success("Saved! These thresholds will auto-load on refresh/re-login.")
 
 # ==============================================================================
 # GCP AUTHENTICATION (PERSONAL GOOGLE OAUTH + SERVICE ACCOUNT FALLBACK)
@@ -1224,7 +1195,7 @@ def run_multi_provider_layer3_audit(
     """
     Routes the audit prompt to Google Gemini (with multi-key pool rotation),
     OpenAI (ChatGPT), Anthropic (Claude), or Deterministic Rule Engine while
-    enforcing the unified Layer-2 + Layer-3 QA report schema.
+    enforcing the unified Layer-2 + Layer-4 QA report schema.
     """
     def _collect_key_pool(passed: str) -> list:
         raw = []
