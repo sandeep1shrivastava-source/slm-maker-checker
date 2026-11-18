@@ -68,11 +68,11 @@ def send_layer3_otp_email(recipient_email: str, otp_code: str) -> tuple[bool, st
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"QA Verification Code: {otp_code}"
-    msg["From"] = f"Academic QA Platform (Layer-3) <{smtp_user}>"
+    msg["From"] = f"Academic QA Platform (Layer-4) <{smtp_user}>"
     msg["To"] = recipient_email
 
     body_text = (
-        "Academic QA Platform (Layer-3 Document Auditor)\n\n"
+        "Academic QA Platform (Layer-4 Document Auditor)\n\n"
         f"Your one-time sign-in verification code is: {otp_code}\n\n"
         "This code expires in 15 minutes. If you did not request this code, please ignore this email."
     )
@@ -91,7 +91,7 @@ def send_layer3_otp_email(recipient_email: str, otp_code: str) -> tuple[bool, st
 
 
 def require_team_auth() -> bool:
-    """Gates Layer-3 access via Approved Email ID + 6-digit Email OTP (with optional Passcode tab)."""
+    """Gates Layer-4 access via Approved Email ID + 6-digit Email OTP (with optional Passcode tab)."""
     approved_emails = parse_approved_emails()
     expected_passcode = str(st.secrets.get("TEAM_PASSCODE", "")).strip()
 
@@ -151,7 +151,7 @@ def require_team_auth() -> bool:
                         max_chars=6,
                         placeholder="6-digit code",
                     ).strip()
-                    if st.form_submit_button("✅ Verify & Unlock Layer-3", type="primary"):
+                    if st.form_submit_button("✅ Verify & Unlock Layer-4", type="primary"):
                         issued_ts = st.session_state.get("layer3_otp_ts", 0)
                         expected_otp = str(st.session_state.get("layer3_otp_code", ""))
                         dev_bypass = str(st.secrets.get("DEV_BYPASS_OTP", "")).strip()
@@ -432,7 +432,7 @@ def get_gcp_services():
     auth_code = str(st.query_params.get("code", "")).strip()
     if (creds is None or not creds.valid) and auth_code and secret_oauth.get("client_id") and secret_oauth.get("client_secret"):
         redirect_uri = str(
-            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
+            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer4.streamlit.app")
         ).strip()
         try:
             resp = requests.post(
@@ -482,7 +482,7 @@ def get_gcp_services():
             return None, None, "", "Missing client_id / client_secret under [gcp_user_oauth] in Streamlit Secrets.", ""
 
         redirect_uri = str(
-            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer3.streamlit.app")
+            secret_oauth.get("redirect_uri", "https://slm-maker-checker-ad99-layer4.streamlit.app")
         ).strip()
         login_hint = str(st.session_state.get("layer3_auth_user", "")).strip()
         oauth_params = {
@@ -1366,7 +1366,7 @@ If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Dedu
 7. Formatting & Schema Uniformity [-1.0]
 
 === MANDATORY REPORTING RULES ===
-1. PRESERVE ALL foundational Layer-3 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
+1. PRESERVE ALL foundational Layer-4 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
 2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
 3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
 4. Base `overall_score` firmly on the rigorous Layer-2 calculation. Classify the final verdict using these exact gates: Approved (>= {_cfg['approved_min']}% AND estimated AI < {_cfg['max_ai_pct']}%), Minor Changes ({_cfg['minor_min']}% to {_cfg['approved_min'] - 0.1:.1f}% OR estimated AI >= {_cfg['max_ai_pct']}%), Major Changes (< {_cfg['minor_min']}%).
@@ -2302,7 +2302,7 @@ def main():
     # ==========================================================================
     # STEP 3: EXECUTE LAYER-3 AUDIT, ARCHIVE TO DRIVE, & SYNC LIVE SHEET
     # ==========================================================================
-    if st.button(f"🚀 Execute Layer-3 Audit ({len(selected_indices)} Selected Files)", type="primary"):
+    if st.button(f"🚀 Execute Layer-4 Audit ({len(selected_indices)} Selected Files)", type="primary"):
         if not selected_indices:
             st.warning("Please check at least one row in the table above.")
             st.stop()
