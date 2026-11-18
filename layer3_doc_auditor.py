@@ -308,6 +308,69 @@ def render_threshold_sidebar():
                 json.dump(payload, cf, indent=2)
             st.success("Saved! These thresholds will auto-load on refresh/re-login.")
 
+
+
+
+st.set_page_config(page_title="Layer-4 Academic Document Auditor", layout="wide")
+
+if not require_team_auth():
+    st.stop()
+
+st.markdown(
+    """
+    <style>
+    .block-container { padding-top: 1.5rem; padding-bottom: 2rem; }
+    .stButton > button { border-radius: 6px; font-weight: 600; }
+    div[data-testid="stMetricValue"] { font-size: 1.5rem; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+GCP_SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
+]
+
+AI_PROVIDER_CATALOG = {
+    "Google Gemini": {
+        "secret_key": "GEMINI_API_KEY",
+        "models": [
+            "gemini-3.8-flash",
+            "gemini-4-hydrogen",
+            "gemini-4-argon",
+            "gemini-3.5-flash-lite",
+        ],
+        "help": "Uses Google AI Studio / Gemini API (GEMINI_API_KEY).",
+    },
+    "OpenAI (ChatGPT)": {
+        "secret_key": "OPENAI_API_KEY",
+        "models": [
+            "gpt-6.1-terra",
+            "gpt-6-luna",
+            "gpt-6.1-sol",
+            "gpt-6-astra",
+        ],
+        "help": "Uses OpenAI Chat Completions API (OPENAI_API_KEY).",
+    },
+    "Anthropic (Claude)": {
+        "secret_key": "ANTHROPIC_API_KEY",
+        "models": [
+            "claude-sonnet-5-5",
+            "claude-fable-5-2",
+            "claude-opus-5-5",
+            "claude-haiku-4-5",
+        ],
+        "help": "Uses Anthropic Messages API (ANTHROPIC_API_KEY).",
+    },
+    "Deterministic Python Only (No AI Key)": {
+        "secret_key": "",
+        "models": ["deterministic-rule-engine"],
+        "help": "Runs local Python MCQ key-balance, duplicate stem, and UGC burstiness checks only.",
+    },
+}
+
+
 # ==============================================================================
 # GCP AUTHENTICATION (PERSONAL GOOGLE OAUTH + SERVICE ACCOUNT FALLBACK)
 # ==============================================================================
