@@ -199,7 +199,7 @@ from layer3_auth import require_team_auth, get_current_auth_token  # match your 
 APPROVED_MIN_SCORE = 85.0        # >= 85% -> Approved
 MINOR_CHANGES_MIN_SCORE = 70.0   # 70% to 84.9% -> Minor Changes (< 70% -> Major Changes)
 MAX_AI_ALLOWED_PCT = 20          # AI Generation Index pass ceiling (e.g., <20% estimated AI)
-get_active_thresholds()['min_cv'] = 0.40         # Deterministic sentence-variation threshold (CV >= 0.40 -> Pass)
+MIN_BURSTINESS_CV = 0.40         # Deterministic sentence-variation threshold (CV >= 0.40 -> Pass)
 
 
 def classify_audit_decision(overall_score: float, ai_verdict: str = "", plag_verdict: str = "") -> str:
@@ -225,14 +225,14 @@ def get_active_thresholds() -> dict:
             "approved_min": float(ss.get("cfg_approved_min", APPROVED_MIN_SCORE)),
             "minor_min": float(ss.get("cfg_minor_min", MINOR_CHANGES_MIN_SCORE)),
             "max_ai_pct": int(ss.get("cfg_max_ai_pct", MAX_AI_ALLOWED_PCT)),
-            "min_cv": float(ss.get("cfg_min_cv", get_active_thresholds()['min_cv'])),
+            "min_cv": float(ss.get("cfg_min_cv", MIN_BURSTINESS_CV)),
         }
     except Exception:
         return {
             "approved_min": APPROVED_MIN_SCORE,
             "minor_min": MINOR_CHANGES_MIN_SCORE,
             "max_ai_pct": MAX_AI_ALLOWED_PCT,
-            "min_cv": get_active_thresholds()['min_cv'],
+            "min_cv": MIN_BURSTINESS_CV,
         }
 
 
