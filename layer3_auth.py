@@ -87,7 +87,7 @@ def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
         return False, "SMTP_USER or SMTP_PASS is missing in Streamlit Secrets."
 
     msg = MIMEText(
-        f"Academic QA Platform (Layer-3 Document Auditor)\n\n"
+        f"Academic QA Platform (Layer-4 Document Auditor)\n\n"
         f"Your one-time sign-in verification code is: {code}\n\n"
         "This code expires in 15 minutes.",
         "plain",
@@ -160,7 +160,7 @@ def require_team_auth() -> bool:
 
     _, col_mid, _ = st.columns([1, 1.5, 1])
     with col_mid:
-        st.markdown("## 🔐 Step 1: Layer-3 Workplace Sign-In")
+        st.markdown("## 🔐 Step 1: Layer-4 Workplace Sign-In")
         st.caption("Verify your approved email ID via 6-digit OTP once to enter the QA workspace.")
 
         tab_labels = (["📧 Email ID + OTP Login"] if approved else []) + (
