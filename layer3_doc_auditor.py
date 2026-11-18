@@ -1804,6 +1804,7 @@ def main():
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
     st.sidebar.subheader("🤖 AI Engine Selection")
+    render_threshold_sidebar()
     selected_provider = st.sidebar.selectbox(
         "Choose AI Provider:",
         options=list(AI_PROVIDER_CATALOG.keys()),
