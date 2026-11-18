@@ -199,7 +199,7 @@ from layer3_auth import require_team_auth, get_current_auth_token  # match your 
 APPROVED_MIN_SCORE = 85.0        # >= 85% -> Approved
 MINOR_CHANGES_MIN_SCORE = 70.0   # 70% to 84.9% -> Minor Changes (< 70% -> Major Changes)
 MAX_AI_ALLOWED_PCT = 20          # AI Generation Index pass ceiling (e.g., <20% estimated AI)
-MIN_BURSTINESS_CV = 0.40         # Deterministic sentence-variation threshold (CV >= 0.40 -> Pass)
+get_active_thresholds()['min_cv'] = 0.40         # Deterministic sentence-variation threshold (CV >= 0.40 -> Pass)
 
 
 def classify_audit_decision(overall_score: float, ai_verdict: str = "", plag_verdict: str = "") -> str:
@@ -210,11 +210,71 @@ def classify_audit_decision(overall_score: float, ai_verdict: str = "", plag_ver
     plag_severe = any(tok in plag_low for tok in ("level 2", "level 3", "reject"))
     plag_minor = "level 1" in plag_low
 
-    if plag_severe or overall_score < MINOR_CHANGES_MIN_SCORE:
+    cfg = get_active_thresholds()
+    if plag_severe or overall_score < cfg["minor_min"]:
         return "Major Changes"
-    if ai_failed or plag_minor or overall_score < APPROVED_MIN_SCORE:
+    if ai_failed or plag_minor or overall_score < cfg["approved_min"]:
         return "Minor Changes"
     return "Approved"
+
+def get_active_thresholds() -> dict:
+    """Reads live sidebar slider values from st.session_state, falling back to module defaults."""
+    try:
+        ss = st.session_state
+        return {
+            "approved_min": float(ss.get("cfg_approved_min", APPROVED_MIN_SCORE)),
+            "minor_min": float(ss.get("cfg_minor_min", MINOR_CHANGES_MIN_SCORE)),
+            "max_ai_pct": int(ss.get("cfg_max_ai_pct", MAX_AI_ALLOWED_PCT)),
+            "min_cv": float(ss.get("cfg_min_cv", get_active_thresholds()['min_cv'])),
+        }
+    except Exception:
+        return {
+            "approved_min": APPROVED_MIN_SCORE,
+            "minor_min": MINOR_CHANGES_MIN_SCORE,
+            "max_ai_pct": MAX_AI_ALLOWED_PCT,
+            "min_cv": get_active_thresholds()['min_cv'],
+        }
+
+
+def render_threshold_sidebar():
+    """Renders interactive Approved / Minor / Major and AI percentage sliders in the Streamlit sidebar."""
+    st.session_state.setdefault("cfg_approved_min", float(APPROVED_MIN_SCORE))
+    st.session_state.setdefault("cfg_minor_min", float(MINOR_CHANGES_MIN_SCORE))
+    st.session_state.setdefault("cfg_max_ai_pct", int(MAX_AI_ALLOWED_PCT))
+    st.session_state.setdefault("cfg_min_cv", float(get_active_thresholds()['min_cv']))
+
+    with st.sidebar.expander("⚙️ Approval & AI Thresholds", expanded=False):
+        app_min = st.slider(
+            "Approved Min Score (%)",
+            min_value=50.0,
+            max_value=100.0,
+            step=1.0,
+            key="cfg_approved_min",
+        )
+        if st.session_state["cfg_minor_min"] > app_min:
+            st.session_state["cfg_minor_min"] = app_min
+        st.slider(
+            "Minor Changes Min Score (%)",
+            min_value=30.0,
+            max_value=float(app_min),
+            step=1.0,
+            key="cfg_minor_min",
+        )
+        st.slider(
+            "Max Allowed AI Content (%)",
+            min_value=5,
+            max_value=80,
+            step=5,
+            key="cfg_max_ai_pct",
+        )
+        st.slider(
+            "Min Burstiness CV (Offline AI)",
+            min_value=0.10,
+            max_value=0.80,
+            step=0.05,
+            key="cfg_min_cv",
+        )
+
 
 
 st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
@@ -1022,7 +1082,7 @@ def build_deterministic_fallback_report(
     rep["ugc_plagiarism_level"] = "Level 0: Baseline Structural Pass (Run with live AI for semantic similarity)"
     rep["ai_index_verdict"] = (
         f"Pass — Natural academic cadence (Burstiness CV: {ai_cv:.3f})"
-        if ai_cv >= MIN_BURSTINESS_CV
+        if ai_cv >= get_active_thresholds()['min_cv']
         else f"Review Recommended — Low sentence variation (Burstiness CV: {ai_cv:.3f})"
     )
     rep["checker_independent_audit"] = "Deterministic Fallback Mode (AI provider temporarily unavailable)"
@@ -1242,6 +1302,7 @@ def run_multi_provider_layer3_audit(
         indent=2,
     )
 
+    _cfg = get_active_thresholds()
     system_instruction = f"""You are a Senior Academic Quality Assurance Auditor & Subject Matter Expert evaluating higher-education instructional content ({fmt} format) against UGC 2018 quality standards and psychometric best practices.
 
 Produce a rigorous, comprehensive, item-by-item QA audit report in STRICT JSON matching the exact schema below.
@@ -1274,7 +1335,7 @@ If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Dedu
 1. PRESERVE ALL foundational Layer-3 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
 2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
 3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
-4. Base `overall_score` firmly on the rigorous Layer-2 calculation. Classify the final verdict using these exact gates: Approved (>= {APPROVED_MIN_SCORE}% AND estimated AI < {MAX_AI_ALLOWED_PCT}%), Minor Changes ({MINOR_CHANGES_MIN_SCORE}% to {APPROVED_MIN_SCORE - 0.1:.1f}% OR estimated AI >= {MAX_AI_ALLOWED_PCT}%), Major Changes (< {MINOR_CHANGES_MIN_SCORE}%).
+4. Base `overall_score` firmly on the rigorous Layer-2 calculation. Classify the final verdict using these exact gates: Approved (>= {_cfg['approved_min']}% AND estimated AI < {_cfg['max_ai_pct']}%), Minor Changes ({_cfg['minor_min']}% to {_cfg['approved_min'] - 0.1:.1f}% OR estimated AI >= {_cfg['max_ai_pct']}%), Major Changes (< {_cfg['minor_min']}%).
 
 Return ONLY valid JSON with these exact keys:
 {{
@@ -1283,7 +1344,7 @@ Return ONLY valid JSON with these exact keys:
   "executive_verdict": "Concise 2-3 sentence summary of key strengths, main defect count, and syllabus unit coverage.",
   "row_numbering_note": "Question numbers below follow the order in the sheet, so Q1 is sheet row 2.",
   "ugc_plagiarism_level": "Level 0: Acceptable (Estimated based on text integrity)",
-  "ai_index_verdict": f"Pass (<{MAX_AI_ALLOWED_PCT}% estimated AI)",
+  "ai_index_verdict": f"Pass (<{_cfg['max_ai_pct']}% estimated AI)",
   "checker_independent_audit": "True",
   "layer2_slm_matrix": [
     {{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.5, "weight": 10, "findings": "...", "remediation": "..."}}
