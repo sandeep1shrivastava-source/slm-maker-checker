@@ -108,7 +108,7 @@ def require_team_auth() -> bool:
             st.rerun()
         return True
 
-    st.markdown("## 🔐 Layer-3 Academic Document Auditor — Team Sign-In")
+    st.markdown("## 🔐 Layer-4 Academic Document Auditor — Team Sign-In")
     st.caption("Verify your approved institutional email via One-Time Password (OTP) to unlock the QA pipeline.")
 
     tabs_labels = []
@@ -186,7 +186,7 @@ def require_team_auth() -> bool:
 # PAGE CONFIGURATION & STYLING
 # ==============================================================================
 st.set_page_config(
-    page_title="Layer-3 Academic Document Auditor & Live Sheets Pipeline",
+    page_title="Layer-4 Academic Document Auditor & Live Sheets Pipeline",
     page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -277,7 +277,7 @@ def render_threshold_sidebar():
 
 
 
-st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
+st.set_page_config(page_title="Layer-4 Academic Document Auditor", layout="wide")
 
 if not require_team_auth():
     st.stop()
@@ -1800,7 +1800,7 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
-    st.sidebar.header("⚙️ Layer-3 Configuration")
+    st.sidebar.header("⚙️ Layer-4 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
     st.sidebar.subheader("🤖 AI Engine Selection")
@@ -1863,7 +1863,7 @@ def main():
         st.sidebar.code(sa_email, language=None)
 
     # Header
-    st.title("📄 Layer-3 Academic Document Auditor & Live Sheets Pipeline")
+    st.title("📄 Layer-4 Academic Document Auditor & Live Sheets Pipeline")
     st.caption(
         f"Active Engine: **{selected_provider}** (`{active_model_id}`) • Multi-Format (SLM, MCQ, QB, PPT) • Direct Word/Docs & Live Sheet Sync"
     )
