@@ -195,6 +195,28 @@ st.set_page_config(
 import streamlit as st
 from layer3_auth import require_team_auth, get_current_auth_token  # match your function name in layer3_auth.py
 
+# === CENTRALIZED LAYER-2 / LAYER-3 APPROVAL THRESHOLDS ===
+APPROVED_MIN_SCORE = 85.0        # >= 85% -> Approved
+MINOR_CHANGES_MIN_SCORE = 70.0   # 70% to 84.9% -> Minor Changes (< 70% -> Major Changes)
+MAX_AI_ALLOWED_PCT = 20          # AI Generation Index pass ceiling (e.g., <20% estimated AI)
+MIN_BURSTINESS_CV = 0.40         # Deterministic sentence-variation threshold (CV >= 0.40 -> Pass)
+
+
+def classify_audit_decision(overall_score: float, ai_verdict: str = "", plag_verdict: str = "") -> str:
+    """Maps numeric QA score + AI/plagiarism compliance gates to Approved / Minor Changes / Major Changes."""
+    ai_low = str(ai_verdict).lower()
+    plag_low = str(plag_verdict).lower()
+    ai_failed = any(tok in ai_low for tok in ("fail", "review recommended", "high ai", "exceed"))
+    plag_severe = any(tok in plag_low for tok in ("level 2", "level 3", "reject"))
+    plag_minor = "level 1" in plag_low
+
+    if plag_severe or overall_score < MINOR_CHANGES_MIN_SCORE:
+        return "Major Changes"
+    if ai_failed or plag_minor or overall_score < APPROVED_MIN_SCORE:
+        return "Minor Changes"
+    return "Approved"
+
+
 st.set_page_config(page_title="Layer-3 Academic Document Auditor", layout="wide")
 
 if not require_team_auth():
@@ -1000,7 +1022,7 @@ def build_deterministic_fallback_report(
     rep["ugc_plagiarism_level"] = "Level 0: Baseline Structural Pass (Run with live AI for semantic similarity)"
     rep["ai_index_verdict"] = (
         f"Pass — Natural academic cadence (Burstiness CV: {ai_cv:.3f})"
-        if ai_cv >= 0.45
+        if ai_cv >= MIN_BURSTINESS_CV
         else f"Review Recommended — Low sentence variation (Burstiness CV: {ai_cv:.3f})"
     )
     rep["checker_independent_audit"] = "Deterministic Fallback Mode (AI provider temporarily unavailable)"
@@ -1252,7 +1274,7 @@ If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Dedu
 1. PRESERVE ALL foundational Layer-3 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
 2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
 3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
-4. Base `overall_score` firmly on the rigorous Layer-2 calculation.
+4. Base `overall_score` firmly on the rigorous Layer-2 calculation. Classify the final verdict using these exact gates: Approved (>= {APPROVED_MIN_SCORE}% AND estimated AI < {MAX_AI_ALLOWED_PCT}%), Minor Changes ({MINOR_CHANGES_MIN_SCORE}% to {APPROVED_MIN_SCORE - 0.1:.1f}% OR estimated AI >= {MAX_AI_ALLOWED_PCT}%), Major Changes (< {MINOR_CHANGES_MIN_SCORE}%).
 
 Return ONLY valid JSON with these exact keys:
 {{
@@ -1261,7 +1283,7 @@ Return ONLY valid JSON with these exact keys:
   "executive_verdict": "Concise 2-3 sentence summary of key strengths, main defect count, and syllabus unit coverage.",
   "row_numbering_note": "Question numbers below follow the order in the sheet, so Q1 is sheet row 2.",
   "ugc_plagiarism_level": "Level 0: Acceptable (Estimated based on text integrity)",
-  "ai_index_verdict": "Pass (<20% estimated AI)",
+  "ai_index_verdict": f"Pass (<{MAX_AI_ALLOWED_PCT}% estimated AI)",
   "checker_independent_audit": "True",
   "layer2_slm_matrix": [
     {{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.5, "weight": 10, "findings": "...", "remediation": "..."}}
@@ -1444,7 +1466,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     r_score = p_verdict.add_run(f"Overall score: {overall_score}%. ")
     r_score.bold = True
     r_score.font.size = Pt(11)
-    r_score.font.color.rgb = RGBColor(22, 101, 52) if overall_score >= 85 else RGBColor(180, 83, 9)
+    r_score.font.color.rgb = RGBColor(22, 101, 52) if overall_score >= APPROVED_MIN_SCORE else RGBColor(180, 83, 9)
     p_verdict.add_run(verdict)
 
     row_note = audit_data.get("row_numbering_note", "")
