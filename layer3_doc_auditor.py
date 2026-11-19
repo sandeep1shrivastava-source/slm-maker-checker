@@ -1270,9 +1270,15 @@ def run_multi_provider_layer3_audit(
         raw = []
         if passed:
             raw.extend(re.split(r"[\s,;]+", str(passed).strip()))
-        if provider == "Google Gemini":
+        secret_map = {
+            "Google Gemini": ("GEMINI_API_KEYS", "GEMINI_API_KEY"),
+            "OpenAI (ChatGPT)": ("OPENAI_API_KEYS", "OPENAI_API_KEY"),
+            "Anthropic (Claude)": ("ANTHROPIC_API_KEYS", "ANTHROPIC_API_KEY"),
+        }
+        if provider in secret_map:
+            k_multi, k_single = secret_map[provider]
             try:
-                sec_pool = st.secrets.get("GEMINI_API_KEYS", [])
+                sec_pool = st.secrets.get(k_multi, [])
                 if isinstance(sec_pool, str):
                     raw.extend(re.split(r"[\s,;]+", sec_pool.strip()))
                 elif isinstance(sec_pool, (list, tuple)):
@@ -1281,7 +1287,7 @@ def run_multi_provider_layer3_audit(
             except Exception:
                 pass
             try:
-                sec_single = st.secrets.get("GEMINI_API_KEY", "")
+                sec_single = st.secrets.get(k_single, "")
                 if sec_single:
                     raw.extend(re.split(r"[\s,;]+", str(sec_single).strip()))
             except Exception:
@@ -1433,8 +1439,17 @@ Return ONLY valid JSON with these exact keys:
                 err_txt = str(exc)
                 all_errs.append(f"[Key#{key_idx}/{active_model}] {err_txt[:95]}")
 
-                # Rotate immediately to next API key on quota exhaustion (429) or invalid key (400/403)
-                if any(tok in err_txt for tok in ("429", "RESOURCE_EXHAUSTED", "quota", "API_KEY_INVALID", "403")):
+                # Rotate immediately only on invalid/unauthorized API keys
+                if any(tok in err_txt for tok in ("API_KEY_INVALID", "invalid_api_key", "authentication_error", "401", "403")):
+                    break
+
+                # Paid-key rate-limit (429): retry up to 2 times with backoff before rotating/falling back
+                if any(tok in err_txt for tok in ("429", "RESOURCE_EXHAUSTED", "rate_limit", "quota")):
+                    if models_to_try.count(active_model) < 3:
+                        time.sleep(8 * models_to_try.count(active_model))
+                        models_to_try.insert(m_idx + 1, active_model)
+                        m_idx += 1
+                        continue
                     break
 
                 # Retry once on temporary 503 high demand before trying other models on this key
