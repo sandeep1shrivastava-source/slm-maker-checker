@@ -1560,6 +1560,20 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
         r.font.color.rgb = RGBColor(15, 23, 42)
         r.font.size = Pt(16)
 
+    ms_title_val = str(audit_data.get("manuscript_title", "")).strip()
+    if not ms_title_val and " — " in title_text:
+        ms_title_val = title_text.split(" — ", 1)[1].split(" [", 1)[0].strip()
+    if ms_title_val:
+        p_ms = doc_obj.add_paragraph()
+        r_ms_lbl = p_ms.add_run("Manuscript Title: ")
+        r_ms_lbl.bold = True
+        r_ms_lbl.font.color.rgb = RGBColor(30, 58, 138)
+        r_ms_lbl.font.size = Pt(11)
+        r_ms_val = p_ms.add_run(ms_title_val)
+        r_ms_val.bold = True
+        r_ms_val.font.color.rgb = RGBColor(15, 23, 42)
+        r_ms_val.font.size = Pt(11)
+
     overall_score = audit_data.get("overall_score", 0)
     verdict = audit_data.get("executive_verdict", "")
     p_verdict = doc_obj.add_paragraph()
@@ -2404,6 +2418,12 @@ def main():
 
                 out_ws.cell(row=sheet_row, column=link_col_0idx + 1, value=report_drive_link)
                 out_ws.cell(row=sheet_row, column=status_col_0idx + 1, value=status_label)
+
+                try:
+                    raw_df.at[sheet_row - 2, raw_headers[link_col_0idx] if existing_link_col else "QA Report Link"] = report_drive_link
+                    raw_df.at[sheet_row - 2, raw_headers[status_col_0idx] if "audit status" in lower_headers else "Audit Status"] = status_label
+                except Exception:
+                    pass
 
                 if tracker["is_live_gsheet"]:
                     sync_live_sheet_row(
