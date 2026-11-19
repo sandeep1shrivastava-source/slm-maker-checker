@@ -17,6 +17,12 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import pypdf
 import streamlit as st
+from layer4_rigor_engine import (
+    run_docx_forensic_precheck,
+    run_text_forensic_precheck,
+    build_strict_audit_prompt,
+    enforce_post_audit_gates,
+)
 
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
@@ -964,6 +970,20 @@ def analyze_mcq_deterministic(df: pd.DataFrame | None, text: str) -> dict:
         result["summary_line"] = "Document-based review completed."
     return result
 
+min_cv = active_thresholds.get("min_burstiness_cv", 0.40)
+if docx_bytes:
+    precheck = run_docx_forensic_precheck(docx_bytes, doc_type=doc_type, min_cv=min_cv)
+else:
+    precheck = run_text_forensic_precheck(manuscript_text, doc_type=doc_type, min_cv=min_cv)
+
+prompt = build_strict_audit_prompt(
+    doc_type=doc_type,
+    manuscript_text=manuscript_text,
+    syllabus_text=syllabus_text,
+    precheck=precheck,
+    thresholds=active_thresholds,
+)
+audit_result = enforce_post_audit_gates(audit_result, precheck)
 
 # ==============================================================================
 # MULTI-PROVIDER AI AUDIT ADAPTER (GEMINI / CHATGPT / CLAUDE / DETERMINISTIC)
