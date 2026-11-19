@@ -248,7 +248,14 @@ RUBRIC MODE: 12-PARAMETER UGC-DEB SLM RUBRIC (Exact 100-Point Weightage; NEVER i
         parts.append(f"REFERENCE SYLLABUS:\n{syllabus_text}")
     if manuscript_text.strip():
         parts.append(f"MANUSCRIPT TEXT:\n{manuscript_text}")
-    return "\n\n".join(parts)
+    # Dual-Mode Syllabus Scoping Safeguard (Single-Unit vs. Full-Course)
+    _unit_scope_rule = (
+        "\n=== SYLLABUS SCOPING RULE: SINGLE-UNIT VS. FULL-COURSE (MANDATORY) ===\n"
+        "- Detect Manuscript Scope First: Check the Report Title, Manuscript Title, and document headings to determine whether this file is (A) a Single Chapter / Unit / Module manuscript, or (B) a Full-Course / Complete Bank manuscript covering all units.\n"
+        "- Case A (Single Chapter / Unit File): Locate ONLY the matching chapter/unit in the full-course syllabus and grade Parameter 1 strictly on that unit's topics. Do NOT deduct points or flag missing topics for other chapters/units that belong in separate files.\n"
+        "- Case B (Full-Course / Complete Bank File, e.g., 'Complete Bank', 'Full Syllabus', or multi-unit compilation): Evaluate Parameter 1 across ALL units/modules in the syllabus and flag any uncovered units normally.\n"
+    )
+    return ("\n\n".join(parts)) + _unit_scope_rule
 
 
 def enforce_post_audit_gates(audit_result: Dict, precheck: Dict) -> Dict:
