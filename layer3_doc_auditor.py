@@ -970,20 +970,6 @@ def analyze_mcq_deterministic(df: pd.DataFrame | None, text: str) -> dict:
         result["summary_line"] = "Document-based review completed."
     return result
 
-min_cv = active_thresholds.get("min_burstiness_cv", 0.40)
-if docx_bytes:
-    precheck = run_docx_forensic_precheck(docx_bytes, doc_type=doc_type, min_cv=min_cv)
-else:
-    precheck = run_text_forensic_precheck(manuscript_text, doc_type=doc_type, min_cv=min_cv)
-
-prompt = build_strict_audit_prompt(
-    doc_type=doc_type,
-    manuscript_text=manuscript_text,
-    syllabus_text=syllabus_text,
-    precheck=precheck,
-    thresholds=active_thresholds,
-)
-audit_result = enforce_post_audit_gates(audit_result, precheck)
 
 # ==============================================================================
 # MULTI-PROVIDER AI AUDIT ADAPTER (GEMINI / CHATGPT / CLAUDE / DETERMINISTIC)
@@ -1357,76 +1343,52 @@ def run_multi_provider_layer3_audit(
     )
 
     _cfg = get_active_thresholds()
-    system_instruction = f"""You are a Senior Academic Quality Assurance Auditor & Subject Matter Expert evaluating higher-education instructional content ({fmt} format) against UGC 2018 quality standards and psychometric best practices.
+    min_cv = float(_cfg.get("min_cv", 0.40))
+    fmt_upper = str(fmt).strip().upper()
+    cv_gate = min_cv if fmt_upper in ("SLM", "MODULE", "THEORY", "PPT", "DOCX") else 0.0
+    precheck = run_text_forensic_precheck(manuscript_text, doc_type=fmt_upper, min_cv=cv_gate)
+    strict_core = build_strict_audit_prompt(fmt_upper, "", "", precheck, _cfg)
 
-Produce a rigorous, comprehensive, item-by-item QA audit report in STRICT JSON matching the exact schema below.
+    system_instruction = f"""{strict_core}
 
-=== LAYER-2 & LAYER-3 INTEGRATED RUBRIC ===
-If the format is an SLM, Module, Theory, or Word Document, apply the UGC 12-Parameter Rubric (Total 100 marks):
-1. Syllabus & Curriculum Mapping (max 10)
-2. Instructional Design & Structure (max 10)
-3. Conceptual Depth & Academic Rigor (max 10)
-4. Language, Tone & Editorial Clarity (max 8)
-5. Real-world Examples & Caselets (max 8)
-6. Self-Assessment & In-Text Exercises (max 8)
-7. Summaries, Keywords & Key Takeaways (max 6)
-8. References, Citations & Plagiarism Checks (max 8)
-9. Formatting, Typography & Presentation (max 8)
-10. Visual Diagrams, Tables & Graphical Quality (max 8)
-11. Pedagogical Alignment & Intended LOs (max 8)
-12. Legal, Ethical & Sensitivity Standards (max 8)
-
-If the format is MCQ, Question Bank, or Quiz, apply the 7-Rule Psychometric Deduction Engine (Start at 100, deduct per defect):
-1. Stem Quality & Clarity [-2.0]
-2. Distractor Plausibility [-2.0]
-3. Answer Key Accuracy [-5.0]
-4. Explanation & Rationale Depth [-2.0]
-5. Bloom's Taxonomy Alignment [-2.0]
-6. Difficulty Calibration [-1.0]
-7. Formatting & Schema Uniformity [-1.0]
-
-=== MANDATORY REPORTING RULES ===
-1. PRESERVE ALL foundational Layer-4 JSON keys (score_breakdown, subject_knowledge_issues, etc.) exactly as specified so the downstream UI renderer does not break.
-2. Add the Layer-2 UGC metrics: "ugc_plagiarism_level", "ai_index_verdict", "checker_independent_audit".
-3. Add the format-specific matrix: "layer2_slm_matrix" (for SLMs) or "layer2_mcq_defects" (for MCQs). Leave the unused one as an empty list [].
-4. Base `overall_score` firmly on the rigorous Layer-2 calculation. Classify the final verdict using these exact gates: Approved (>= {_cfg['approved_min']}% AND estimated AI < {_cfg['max_ai_pct']}%), Minor Changes ({_cfg['minor_min']}% to {_cfg['approved_min'] - 0.1:.1f}% OR estimated AI >= {_cfg['max_ai_pct']}%), Major Changes (< {_cfg['minor_min']}%).
+=== MANDATORY LAYER-4 UI SCHEMA RULES ===
+1. Preserve ALL JSON keys below so the Streamlit UI and Word compiler render cleanly.
+2. Report "ugc_plagiarism_level" strictly as "NOT RUN (Requires Institutional Similarity Tool)". Never guess "Level 0".
+3. Populate ONLY "layer2_slm_matrix" (for SLM/Theory using exact 10/8/5 weights totaling 100) OR "layer2_mcq_defects" (for MCQ/QB). Leave the unused list empty [].
+4. Never award >70% on any parameter without citing specific section/item evidence from the text.
 
 Return ONLY valid JSON with these exact keys:
 {{
   "report_title": "QA Report: {subject} {fmt} ({mcq_stats.get('total_questions') or 'Document'} items)",
-  "overall_score": 82,
-  "executive_verdict": "Concise 2-3 sentence summary of key strengths, main defect count, and syllabus unit coverage.",
-  "row_numbering_note": "Question numbers below follow the order in the sheet, so Q1 is sheet row 2.",
-  "ugc_plagiarism_level": "Level 0: Acceptable (Estimated based on text integrity)",
-  "ai_index_verdict": f"Pass (<{_cfg['max_ai_pct']}% estimated AI)",
+  "overall_score": 52,
+  "executive_verdict": "Concise 2-3 sentence forensic summary.",
+  "row_numbering_note": "Item numbers follow document or sheet order.",
+  "ugc_plagiarism_level": "NOT RUN (Requires Institutional Similarity Tool)",
+  "ai_index_verdict": "Pass (<{_cfg['max_ai_pct']}% estimated AI)",
   "checker_independent_audit": "True",
-  "layer2_slm_matrix": [
-    {{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.5, "weight": 10, "findings": "...", "remediation": "..."}}
-  ],
-  "layer2_mcq_defects": [
-    {{"Item_ID": "Q1", "Tab_Category": "Distractor Plausibility", "Severity": "Moderate", "Defect_Description": "...", "Deduction": 2.0}}
-  ],
+  "layer2_slm_matrix": [{{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.0, "weight": 10, "findings": "...", "remediation": "..."}}],
+  "layer2_mcq_defects": [{{"Item_ID": "Q1", "Tab_Category": "Technical Errors", "Severity": "Major", "Defect_Description": "...", "Deduction": 5.0}}],
   "score_breakdown": [
     {{"criteria": "Subject knowledge / factual errors", "max_deduction": "-30%", "deducted": "-2%", "finding": "..."}},
     {{"criteria": "Technical errors (letter vs answer mismatch)", "max_deduction": "-30%", "deducted": "0%", "finding": "..."}},
-    {{"criteria": "Clarity & repetition", "max_deduction": "-20%", "deducted": "-14%", "finding": "..."}},
+    {{"criteria": "Clarity & repetition", "max_deduction": "-20%", "deducted": "-10%", "finding": "..."}},
     {{"criteria": "Grammar & semantics", "max_deduction": "-10%", "deducted": "-2%", "finding": "..."}},
     {{"criteria": "Subject mismatch", "max_deduction": "-10%", "deducted": "0%", "finding": "..."}}
   ],
-  "subject_knowledge_issues": [{{"item_ref": "Q13", "issue": "...", "suggestion": "..."}}],
-  "technical_errors_summary": "None. All letters match.",
+  "subject_knowledge_issues": [{{"item_ref": "Section 1", "issue": "...", "suggestion": "..."}}],
+  "technical_errors_summary": "Summary of technical/structural errors.",
   "technical_error_items": [],
-  "repetition_groups": [{{"concept": "Concept name", "items": "Q6, Q11", "delete_items": "Q11"}}],
-  "high_frequency_clusters": ["Interoperability: Q125, Q126, Q131, Q143, Q157, Q160"],
-  "clarity_issues": [{{"item_ref": "Q77", "issue": "..."}}],
-  "grammar_issues": [{{"item_ref": "Q68", "issue": "...", "fix": "..."}}],
-  "subject_relevance_verdict": "All items are relevant to {subject}.",
-  "syllabus_mapping_status": "Partly mapped",
-  "syllabus_mapping_note": "The sheet has no Unit column, so units were mapped from question blocks.",
-  "syllabus_mapping": [{{"unit": "1", "topic": "Unit Title", "items_covered": "—", "status": "❌ Not covered"}}],
-  "mapping_verdict": "Detailed coverage calculation and cross-unit overlap guidance.",
-  "priority_fixes": ["Delete redundant items.", "Fix flagged grammar.", "Add a Unit column."],
-  "projected_score_after_fixes": "95%"
+  "repetition_groups": [{{"concept": "Repeated concept", "items": "Section 1, Section 2", "delete_items": "Section 2"}}],
+  "high_frequency_clusters": [],
+  "clarity_issues": [{{"item_ref": "Section 1", "issue": "..."}}],
+  "grammar_issues": [{{"item_ref": "Section 1", "issue": "...", "fix": "..."}}],
+  "subject_relevance_verdict": "Relevance evaluation for {subject}.",
+  "syllabus_mapping_status": "Fully mapped",
+  "syllabus_mapping_note": "Unit-level syllabus coverage assessment.",
+  "syllabus_mapping": [{{"unit": "1", "topic": "Unit Title", "items_covered": "—", "status": "✔ Covered"}}],
+  "mapping_verdict": "Detailed coverage calculation.",
+  "priority_fixes": ["Fix 1", "Fix 2"],
+  "projected_score_after_fixes": "90%"
 }}"""
 
     user_prompt = (
@@ -1456,6 +1418,14 @@ Return ONLY valid JSON with these exact keys:
                 else:
                     return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()))
 
+                parsed = enforce_post_audit_gates(parsed, precheck)
+                parsed["ugc_plagiarism_level"] = "NOT RUN (Requires Institutional Similarity Tool)"
+                if precheck.get("force_major_changes"):
+                    parsed["overall_score"] = min(float(parsed.get("overall_score", 0)), float(_cfg["minor_min"]) - 5.0)
+                    parsed["ai_index_verdict"] = f"Fail (Prose CV {precheck['burstiness']['prose_cv']} < {min_cv})"
+                    ev = str(parsed.get("executive_verdict", ""))
+                    if "MAJOR CHANGES" not in ev.upper():
+                        parsed["executive_verdict"] = f"MAJOR CHANGES REQUIRED: {ev}"
                 key_tag = f" | Key #{key_idx}" if len(key_pool) > 1 else ""
                 parsed["_ai_provider_used"] = f"{provider} ({active_model}{key_tag})"
                 return parsed
