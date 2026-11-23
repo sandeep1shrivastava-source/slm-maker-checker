@@ -51,6 +51,13 @@ st.set_page_config(
 )
 
 
+# Capture incoming Google OAuth authorization code before login gate runs
+_incoming_oauth_code = str(st.query_params.get("code", "")).strip()
+if _incoming_oauth_code:
+    st.session_state["l5_pending_oauth_code"] = _incoming_oauth_code
+    for _qp in ("code", "state", "scope", "authuser", "prompt", "hd"):
+        st.query_params.pop(_qp, None)
+
 GCP_SCOPES = [
     "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)",
     "[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)",
@@ -271,43 +278,63 @@ def get_gcp_services():
     elif secret_oauth.get("refresh_token"):
         creds = Credentials.from_authorized_user_info(secret_oauth, GCP_SCOPES)
 
-    auth_code = str(st.query_params.get("code", "")).strip()
+    auth_code = st.session_state.pop("l5_pending_oauth_code", "") or str(st.query_params.get("code", "")).strip()
     redirect_uri = str(secret_oauth.get("l5_redirect_uri") or secret_oauth.get("redirect_uri", "")).strip()
 
     if (creds is None or not creds.valid) and auth_code and secret_oauth.get("client_id"):
-        resp = requests.post(
-            "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
-            data={
-                "code": auth_code,
-                "client_id": str(secret_oauth["client_id"]).strip(),
-                "client_secret": str(secret_oauth["client_secret"]).strip(),
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            },
-            timeout=20,
-        )
-        tok = resp.json()
-        if resp.status_code == 200 and tok.get("access_token"):
-            payload = {
-                "token": tok["access_token"],
-                "refresh_token": tok.get("refresh_token", secret_oauth.get("refresh_token", "")),
-                "token_uri": "[https://oauth2.googleapis.com/token](https://oauth2.googleapis.com/token)",
-                "client_id": str(secret_oauth["client_id"]).strip(),
-                "client_secret": str(secret_oauth["client_secret"]).strip(),
-                "scopes": GCP_SCOPES,
-            }
-            st.session_state["l5_gcp_creds_json"] = json.dumps(payload)
-            creds = Credentials.from_authorized_user_info(payload, GCP_SCOPES)
+        try:
+            resp = requests.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": auth_code,
+                    "client_id": str(secret_oauth["client_id"]).strip(),
+                    "client_secret": str(secret_oauth["client_secret"]).strip(),
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                timeout=20,
+            )
+            tok = resp.json()
+            if resp.status_code == 200 and tok.get("access_token"):
+                ref_tok = tok.get("refresh_token") or secret_oauth.get("refresh_token", "")
+                payload = {
+                    "token": tok["access_token"],
+                    "refresh_token": ref_tok,
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "client_id": str(secret_oauth["client_id"]).strip(),
+                    "client_secret": str(secret_oauth["client_secret"]).strip(),
+                    "scopes": GCP_SCOPES,
+                }
+                st.session_state["l5_gcp_creds_json"] = json.dumps(payload)
+                if tok.get("refresh_token"):
+                    st.session_state["l5_new_refresh_token"] = tok["refresh_token"]
+                st.session_state.pop("l5_gcp_oauth_error", None)
+                creds = Credentials.from_authorized_user_info(payload, GCP_SCOPES)
+            else:
+                err_desc = tok.get("error_description") or tok.get("error") or resp.text[:250]
+                st.session_state["l5_gcp_oauth_error"] = (
+                    f"Google OAuth Token Exchange Failed (HTTP {resp.status_code}): {err_desc} | "
+                    f"Configured redirect_uri: `{redirect_uri}`"
+                )
+        except Exception as exc:
+            st.session_state["l5_gcp_oauth_error"] = f"Google OAuth Network Error: {exc}"
+
         for qp in ("code", "state", "scope", "authuser", "prompt", "hd"):
             st.query_params.pop(qp, None)
 
     if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        st.session_state["l5_gcp_creds_json"] = creds.to_json()
+        try:
+            creds.refresh(Request())
+            st.session_state["l5_gcp_creds_json"] = creds.to_json()
+        except Exception as ref_exc:
+            st.session_state["l5_gcp_oauth_error"] = f"Google Token Refresh Failed: {ref_exc}"
+            creds = None
 
     if not creds or not creds.valid:
         if not secret_oauth.get("client_id"):
             return None, None, "Missing [gcp_user_oauth] in st.secrets.", ""
+        if not redirect_uri:
+            return None, None, "Missing `redirect_uri` under [gcp_user_oauth] in st.secrets.", ""
         params = {
             "client_id": str(secret_oauth["client_id"]).strip(),
             "redirect_uri": redirect_uri,
@@ -316,7 +343,8 @@ def get_gcp_services():
             "access_type": "offline",
             "prompt": "consent",
         }
-        return None, None, "Connect Google Drive & Master Tracker:", "[https://accounts.google.com/o/oauth2/v2/auth](https://accounts.google.com/o/oauth2/v2/auth)?" + urllib.parse.urlencode(params)
+        err_banner = st.session_state.get("l5_gcp_oauth_error", "")
+        return None, None, err_banner or f"OAuth Redirect URI: {redirect_uri}", "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
 
     return (
         build("drive", "v3", credentials=creds, cache_discovery=False),
@@ -479,7 +507,14 @@ def main():
 
     drive_svc, sheets_svc, gcp_msg, oauth_url = get_gcp_services()
     if drive_svc is None and oauth_url:
+        if "Failed" in gcp_msg or "Error" in gcp_msg or "Missing" in gcp_msg:
+            st.error(gcp_msg)
         st.link_button("🔐 Sign In with Google to Connect Master Tracker & Drive", oauth_url, type="primary")
+    elif drive_svc is not None:
+        st.success("✅ Google Drive & Master Tracker Connected")
+        if st.session_state.get("l5_new_refresh_token"):
+            with st.expander("🔑 Optional: Save Permanent Refresh Token to Streamlit Secrets (Zero-Click Future Logins)", expanded=False):
+                st.code(f'refresh_token = "{st.session_state["l5_new_refresh_token"]}"', language="toml")
 
     aspect_mode = st.radio(
         "Select Layer-5 Operational Pillar:",
