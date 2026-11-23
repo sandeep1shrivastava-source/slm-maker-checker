@@ -59,8 +59,8 @@ if _incoming_oauth_code:
         st.query_params.pop(_qp, None)
 
 GCP_SCOPES = [
-    "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)",
-    "[https://www.googleapis.com/auth/spreadsheets](https://www.googleapis.com/auth/spreadsheets)",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 AI_PROVIDERS = {

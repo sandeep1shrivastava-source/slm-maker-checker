@@ -1106,7 +1106,7 @@ def _extract_json_safe(raw_text: str) -> Dict:
 
 def _discover_live_gemini_models(api_key: str, primary_model: str) -> List[str]:
     try:
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models?key=](https://generativelanguage.googleapis.com/v1beta/models?key=){api_key.strip()}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key.strip()}"
         resp = requests.get(url, timeout=15)
         if resp.status_code != 200:
             return []
@@ -1305,7 +1305,7 @@ def call_layer5_llm_json(
             for attempt in range(len(delays) + 1):
                 try:
                     if provider == "Google Gemini":
-                        url = f"[https://generativelanguage.googleapis.com/v1beta/models/](https://generativelanguage.googleapis.com/v1beta/models/){active_model}:generateContent?key={api_key}"
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{active_model}:generateContent?key={api_key}"
                         payload = {
                             "systemInstruction": {"parts": [{"text": system_instruction}]},
                             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -1318,7 +1318,7 @@ def call_layer5_llm_json(
                         return _extract_json_safe(raw_txt)
 
                     elif provider == "OpenAI (ChatGPT)":
-                        url = "[https://api.openai.com/v1/chat/completions](https://api.openai.com/v1/chat/completions)"
+                        url = "https://api.openai.com/v1/chat/completions"
                         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
                         payload = {
                             "model": active_model,
@@ -1334,7 +1334,7 @@ def call_layer5_llm_json(
                         return _extract_json_safe(raw_txt)
 
                     elif provider == "Anthropic (Claude)":
-                        url = "[https://api.anthropic.com/v1/messages](https://api.anthropic.com/v1/messages)"
+                        url = "https://api.anthropic.com/v1/messages"
                         headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
                         payload = {
                             "model": active_model,
@@ -1773,7 +1773,7 @@ def _render_mermaid_300dpi_png(
         return _render_branded_infographic_png(clean, title=title, diagram_style=diagram_style, primary_hex=primary_hex, accent_hex=accent_hex)
     try:
         b64 = base64.urlsafe_b64encode(clean.encode("utf-8")).decode("ascii")
-        resp = requests.get(f"[https://mermaid.ink/img/](https://mermaid.ink/img/){b64}?type=png&bgColor=!white&scale=3", timeout=8)
+        resp = requests.get(f"https://mermaid.ink/img/{b64}?type=png&bgColor=!white&scale=3", timeout=8)
         if resp.status_code == 200 and resp.content:
             return resp.content
     except Exception:
@@ -1802,7 +1802,7 @@ def _generate_phase2_illustration(prompt_text: str, image_provider: str = "OpenA
         keys = _collect_secret_keys("Google Gemini")
         if not keys:
             raise RuntimeError("GEMINI_API_KEY missing in st.secrets for Imagen 3.")
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=](https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=){keys[0]}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key={keys[0]}"
         payload = {"instances": [{"prompt": safe_prompt}], "parameters": {"sampleCount": 1, "aspectRatio": "16:9"}}
         resp = requests.post(url, json=payload, timeout=90)
         if resp.status_code != 200:
@@ -1812,7 +1812,7 @@ def _generate_phase2_illustration(prompt_text: str, image_provider: str = "OpenA
     keys = _collect_secret_keys("OpenAI (ChatGPT)")
     if not keys:
         raise RuntimeError("OPENAI_API_KEY missing in st.secrets for DALL-E 3.")
-    url = "[https://api.openai.com/v1/images/generations](https://api.openai.com/v1/images/generations)"
+    url = "https://api.openai.com/v1/images/generations"
     headers = {"Authorization": f"Bearer {keys[0]}", "Content-Type": "application/json"}
     payload = {"model": "dall-e-3", "prompt": safe_prompt, "n": 1, "size": "1792x1024", "response_format": "b64_json"}
     resp = requests.post(url, headers=headers, json=payload, timeout=90)
@@ -2748,7 +2748,7 @@ def upload_layer5_artifact_to_drive(
     meta = {"name": safe_fn, "parents": [curr_parent]}
     media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mime_type, resumable=False)
     uploaded = drive_svc.files().create(body=meta, media_body=media, fields="id, webViewLink", supportsAllDrives=True).execute()
-    return uploaded.get("webViewLink") or f"[https://drive.google.com/file/d/](https://drive.google.com/file/d/){uploaded['id']}/view"
+    return uploaded.get("webViewLink") or f"https://drive.google.com/file/d/{uploaded['id']}/view"
 
 
 def sync_layer5_master_tracker_row(
