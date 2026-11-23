@@ -255,7 +255,13 @@ RUBRIC MODE: 12-PARAMETER UGC-DEB SLM RUBRIC (Exact 100-Point Weightage; NEVER i
         "- Case A (Single Chapter / Unit File): Locate ONLY the matching chapter/unit in the full-course syllabus and grade Parameter 1 strictly on that unit's topics. Do NOT deduct points or flag missing topics for other chapters/units that belong in separate files.\n"
         "- Case B (Full-Course / Complete Bank File, e.g., 'Complete Bank', 'Full Syllabus', or multi-unit compilation): Evaluate Parameter 1 across ALL units/modules in the syllabus and flag any uncovered units normally.\n"
     )
-    return ("\n\n".join(parts)) + _unit_scope_rule
+    _mcq_rule = (
+        "\n=== DETERMINISTIC EXCEL MCQ GROUNDING RULE (MANDATORY) ===\n"
+        "- Treat '=== DETERMINISTIC EXCEL MCQ FORENSIC PRE-AUDIT (GROUND TRUTH) ===' counts as binding ground truth.\n"
+        "- If Verified Answer-Key Mismatches is 0, award 0% deduction for Technical Errors (letter vs answer mismatch) and do NOT invent key mismatches or misread Option C as the answer key.\n"
+        "- Cite exact [Sheet | Row | Sr No] tags and report verified duplicate stems and Sr No skips under Clarity & Repetition.\n"
+    )
+    return (("\n\n".join(parts)) + _unit_scope_rule) + _mcq_rule
 
 
 def enforce_post_audit_gates(audit_result: Dict, precheck: Dict) -> Dict:
@@ -264,3 +270,7 @@ def enforce_post_audit_gates(audit_result: Dict, precheck: Dict) -> Dict:
         audit_result["verdict"] = "Major Changes"
     audit_result["plagiarism_status"] = "NOT RUN (Requires Institutional Similarity Tool)"
     return audit_result
+
+def run_mcq_xlsx_forensic_precheck(source) -> dict:
+    from mcq_forensic_parser import format_mcq_audit_payload
+    return format_mcq_audit_payload(source)

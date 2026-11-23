@@ -1,3 +1,20 @@
+try:
+    from mcq_forensic_parser import format_mcq_audit_payload as _format_mcq_audit_payload
+except Exception:
+    _format_mcq_audit_payload = None
+
+def _try_extract_mcq_xlsx(source_obj, filename_hint=''):
+    if _format_mcq_audit_payload is None: return None
+    fn = str(filename_hint or getattr(source_obj, 'name', '') or '').lower()
+    if fn and not fn.endswith(('.xlsx', '.xlsm')): return None
+    try:
+        r = _format_mcq_audit_payload(source_obj)
+        if r and r.get('is_mcq_workbook'):
+            return r['formatted_text'] + ('\n\n' + r['embedded_structure_text'] if r.get('embedded_structure_text') else '')
+    except Exception:
+        return None
+    return None
+
 import urllib.parse
 import os
 import io
@@ -191,6 +208,24 @@ def require_team_auth() -> bool:
 # ==============================================================================
 # PAGE CONFIGURATION & STYLING
 # ==============================================================================
+
+_orig_build_strict_audit_prompt = build_strict_audit_prompt
+def build_strict_audit_prompt(*args, **kwargs):
+    al, mk = list(args), '=== EMBEDDED STRUCTURE TAB:'
+    for i, v in enumerate(al):
+        if isinstance(v, str) and mk in v:
+            mt, es = v.split(mk, 1); al[i] = mt.strip(); ef = mk + es
+            if 'syllabus_text' in kwargs and not str(kwargs['syllabus_text'] or '').strip(): kwargs['syllabus_text'] = ef
+            elif i + 1 < len(al) and isinstance(al[i + 1], str) and not al[i + 1].strip(): al[i + 1] = ef
+            elif 'syllabus_text' not in kwargs: kwargs['syllabus_text'] = ef
+            break
+    for k, v in list(kwargs.items()):
+        if isinstance(v, str) and mk in v and k != 'syllabus_text':
+            mt, es = v.split(mk, 1); kwargs[k] = mt.strip()
+            if not str(kwargs.get('syllabus_text') or '').strip(): kwargs['syllabus_text'] = mk + es
+            break
+    return _orig_build_strict_audit_prompt(*al, **kwargs)
+
 st.set_page_config(
     page_title="Layer-4 Academic Document Auditor & Live Sheets Pipeline",
     page_icon="📄",
@@ -621,6 +656,8 @@ def extract_text_and_df_from_buffer(buf: io.BytesIO, filename: str):
     Extracts structured text (and DataFrame if Excel/CSV) from .docx, .pdf, .xlsx, .csv, or .txt.
     Returns (extracted_text: str, df_or_none: pd.DataFrame | None).
     """
+    _mx = _try_extract_mcq_xlsx(buf, filename)
+    if _mx: return _mx
     fname = filename.lower()
     buf.seek(0)
 
@@ -797,6 +834,8 @@ def sync_live_sheet_row(
 # ==============================================================================
 def detect_deliverable_format(explicit_fmt: str, filename: str, text_sample: str) -> str:
     """Identifies MCQ, SLM, QB, or PPT from explicit tracker metadata, filename, or text."""
+    _mx = _try_extract_mcq_xlsx(explicit_fmt, filename)
+    if _mx: return _mx
     combined_meta = f"{explicit_fmt} {filename}".upper()
     if any(k in combined_meta for k in ["MCQ", "MULTIPLE CHOICE", "OBJECTIVE", "QUIZ"]):
         return "MCQ"
