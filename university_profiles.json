@@ -1,0 +1,60 @@
+{
+  "ADYPU": {
+    "university_id": "ADYPU",
+    "university_name": "AJEENKYA DY PATIL UNIVERSITY",
+    "tagline": "THE INNOVATION UNIVERSITY",
+    "school_name": "Centre for Distance and Online Education",
+    "primary_hex": "1E3A8A",
+    "accent_hex": "D97706",
+    "copyright_line": "All Copyrights reserved with Ajeenkya DY Patil University (CDOE)",
+    "statutory_footer": "A State Private University established under the Maharashtra State Legislature Act, 2015 | Recognized by the University Grants Commission (UGC), Government of India",
+    "enable_mirror_notes_margin": true,
+    "default_committee": [
+      {
+        "role": "Vice Chancellor - Chairman",
+        "name": "Dr. Rakesh Kumar Jain"
+      },
+      {
+        "role": "Dean Academics",
+        "name": "Dr. Sunil Ingole"
+      },
+      {
+        "role": "Professor & Director - CDOE",
+        "name": "Dr. Kamaljeet Kaur Siddhu"
+      },
+      {
+        "role": "Professor & Dean - IQAC",
+        "name": "Dr. Deepa Joshi"
+      },
+      {
+        "role": "Professor & Registrar",
+        "name": "Dr. Sudhakar Shinde"
+      }
+    ]
+  },
+  "GENERIC_UGC": {
+    "university_id": "GENERIC_UGC",
+    "university_name": "STATE OPEN & DISTANCE LEARNING UNIVERSITY",
+    "tagline": "EXCELLENCE IN ACCESSIBLE HIGHER EDUCATION",
+    "school_name": "Centre for Distance and Online Education (CDOE)",
+    "primary_hex": "0F4C81",
+    "accent_hex": "0D9488",
+    "copyright_line": "All Copyrights reserved with the University (CDOE)",
+    "statutory_footer": "Established by State Legislature Act | Recognized by the University Grants Commission (UGC-DEB), Government of India",
+    "enable_mirror_notes_margin": true,
+    "default_committee": [
+      {
+        "role": "Vice Chancellor - Chairman",
+        "name": "Prof. (Dr.) A. K. Sharma"
+      },
+      {
+        "role": "Dean Academics",
+        "name": "Prof. (Dr.) R. M. Kulkarni"
+      },
+      {
+        "role": "Director - Distance & Online Education",
+        "name": "Dr. S. P. Deshmukh"
+      }
+    ]
+  }
+}
