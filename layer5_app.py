@@ -1,3 +1,4 @@
+import hashlib
 import hmac
 import io
 import json
@@ -48,6 +49,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 
 GCP_SCOPES = [
     "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)",
@@ -103,6 +105,63 @@ def _send_otp_email(recipient_email: str, otp_code: str) -> tuple[bool, str]:
         return False, f"SMTP error: {exc}"
 
 
+def _verify_cross_app_sso(approved_emails: set[str]) -> tuple[bool, str]:
+    """
+    Validates a signed HMAC-SHA256 SSO handoff link from Layer-4:
+    ?sso_user=<email>&exp=<unix_ts>&sig=<hex>&drive_id=<opt>&tracker_id=<opt>&tab=<opt>&row=<opt>&status=<opt>
+    """
+    sso_user = str(st.query_params.get("sso_user", "")).strip().lower()
+    sso_exp = str(st.query_params.get("exp", "")).strip()
+    sso_sig = str(st.query_params.get("sig", "")).strip()
+    if not (sso_user and sso_exp and sso_sig):
+        return False, ""
+
+    drive_id = str(st.query_params.get("drive_id", "")).strip()
+    tracker_id = str(st.query_params.get("tracker_id", "")).strip()
+    tab_name = str(st.query_params.get("tab", "")).strip()
+    sheet_row = str(st.query_params.get("row", "")).strip()
+    l4_status = str(st.query_params.get("status", "")).strip()
+
+    for qp in ("sso_user", "exp", "sig", "drive_id", "tracker_id", "tab", "row", "status"):
+        st.query_params.pop(qp, None)
+
+    sso_secret = str(st.secrets.get("SSO_SECRET", "")).strip()
+    if not sso_secret:
+        return False, "SSO_SECRET is not configured in Layer-5 st.secrets."
+
+    try:
+        if int(sso_exp) < int(time.time()):
+            return False, "Layer-4 SSO handoff link has expired (15-minute window). Please sign in below."
+    except ValueError:
+        return False, "Malformed SSO expiry timestamp."
+
+    if approved_emails and sso_user not in approved_emails:
+        return False, f"Access denied: `{sso_user}` is not authorized for Layer-5."
+
+    canonical = f"{sso_user}|{sso_exp}|{drive_id}|{tracker_id}|{sheet_row}"
+    expected_sig = hmac.new(
+        sso_secret.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(sso_sig, expected_sig):
+        return False, "Invalid Layer-4 SSO signature. Please sign in directly."
+
+    st.session_state["l5_auth_ok"] = True
+    st.session_state["l5_auth_user"] = sso_user
+    st.session_state["l5_auth_method"] = "Layer-4 SSO Handoff"
+    if any((drive_id, tracker_id, tab_name, sheet_row, l4_status)):
+        st.session_state["l5_sso_handoff"] = {
+            "drive_id": drive_id,
+            "tracker_id": tracker_id,
+            "tab_name": tab_name,
+            "sheet_row": int(sheet_row) if sheet_row.isdigit() else 0,
+            "l4_status": l4_status,
+        }
+    return True, ""
+
+
 def require_layer5_auth() -> bool:
     l5_specific = _parse_email_list("LAYER5_APPROVED_EMAILS") | _parse_email_list("DUAL_LAYER_EMAILS")
     l4_shared = (
@@ -111,10 +170,15 @@ def require_layer5_auth() -> bool:
         | _parse_email_list("AUTHORIZED_EMAILS")
     )
     blocked_l4_only = _parse_email_list("LAYER4_ONLY_EMAILS")
-
-    # Enforce strict Layer-5 allowlist when LAYER5_APPROVED_EMAILS or DUAL_LAYER_EMAILS is set;
-    # otherwise fall back to shared APPROVED_EMAILS minus explicit LAYER4_ONLY_EMAILS.
     approved_emails = (l5_specific if l5_specific else l4_shared) - blocked_l4_only
+
+    # 1. Check incoming Cross-App SSO deep-link from Layer-4 first
+    if not st.session_state.get("l5_auth_ok"):
+        sso_ok, sso_err = _verify_cross_app_sso(approved_emails)
+        if sso_ok:
+            st.rerun()
+        elif sso_err:
+            st.session_state["l5_sso_banner_err"] = sso_err
 
     l5_pass = str(st.secrets.get("LAYER5_TEAM_PASSCODE", "")).strip()
     dual_pass = str(st.secrets.get("DUAL_LAYER_PASSCODE", "")).strip()
@@ -128,15 +192,19 @@ def require_layer5_auth() -> bool:
 
     if st.session_state.get("l5_auth_ok"):
         user = st.session_state.get("l5_auth_user", "Reviewer")
-        st.sidebar.success(f"👤 Signed in: **{user}**")
+        method = st.session_state.get("l5_auth_method", "Direct Login")
+        st.sidebar.success(f"👤 **{user}**\n\n🔑 {method}")
         if st.sidebar.button("🔒 Sign Out", use_container_width=True):
-            for k in ("l5_auth_ok", "l5_auth_user", "l5_otp_code", "l5_otp_email", "l5_otp_ts"):
+            for k in ("l5_auth_ok", "l5_auth_user", "l5_auth_method", "l5_otp_code", "l5_otp_email", "l5_otp_ts", "l5_sso_handoff"):
                 st.session_state.pop(k, None)
             st.rerun()
         return True
 
     st.markdown("## ✨ Layer-5 Content Enrichment & Book Compiler — Sign-In")
-    tabs = st.tabs(["📧 Email OTP Login", "🔑 Team Passcode"])
+    if st.session_state.get("l5_sso_banner_err"):
+        st.warning(st.session_state.pop("l5_sso_banner_err"))
+
+    tabs = st.tabs(["📧 Institutional Email OTP Login", "🔑 Layer-5 / Dual Passcode"])
 
     with tabs[0]:
         with st.form("l5_send_otp"):
@@ -167,6 +235,7 @@ def require_layer5_auth() -> bool:
                     ):
                         st.session_state["l5_auth_ok"] = True
                         st.session_state["l5_auth_user"] = st.session_state["l5_otp_email"]
+                        st.session_state["l5_auth_method"] = "Institutional Email OTP"
                         st.rerun()
                     else:
                         st.error("Invalid OTP.")
@@ -174,17 +243,17 @@ def require_layer5_auth() -> bool:
     with tabs[1]:
         if valid_passcodes:
             with st.form("l5_pass_form"):
-                p_in = st.text_input("Layer-5 / Dual-Access Passcode:", type="password")
+                p_in = st.text_input("Layer-5 / Dual-Access Passcode:", type="password").strip()
                 if st.form_submit_button("Unlock", type="primary"):
-                    cleaned_p = p_in.strip()
-                    if any(hmac.compare_digest(cleaned_p, vp) for vp in valid_passcodes):
+                    if any(hmac.compare_digest(p_in, vp) for vp in valid_passcodes):
                         st.session_state["l5_auth_ok"] = True
                         st.session_state["l5_auth_user"] = "Passcode Reviewer"
+                        st.session_state["l5_auth_method"] = "Role Passcode"
                         st.rerun()
                     else:
                         st.error("Incorrect passcode for Layer-5.")
         else:
-            st.info("Passcode login is disabled; sign in using your authorized Institutional Email OTP.")
+            st.info("Passcode login is disabled; sign in via your authorized Institutional Email OTP.")
     return False
 
 
@@ -640,7 +709,31 @@ def main():
 
     # ==========================================================================
     # ASPECT 1: UNIT REMEDIATION & AUDIT-VERIFIED CREATIVE ENRICHMENT
-    # ==========================================================================
+
+    sso_pkg = st.session_state.get("l5_sso_handoff")
+    if sso_pkg and sso_pkg.get("drive_id"):
+        with st.container(border=True):
+            sc_a, sc_b = st.columns([0.75, 0.25])
+            sc_a.info(
+                f"⚡ **Layer-4 SSO Deep-Link Active:** Drive File `{sso_pkg['drive_id']}` "
+                f"(Verdict: **{sso_pkg.get('l4_status') or 'Verified'}**)"
+            )
+            if sc_b.button("📥 Auto-Clone from Drive", type="primary", use_container_width=True):
+                if drive_svc is None:
+                    st.error("Click 'Sign In with Google' at the top first to connect Drive.")
+                else:
+                    with st.spinner("Cloning handed-off manuscript read-only from Google Drive..."):
+                        b_data, f_name = download_drive_file_readonly(drive_svc, sso_pkg["drive_id"])
+                        st.session_state["l5_loaded_doc"] = {
+                            "bytes": b_data,
+                            "filename": f_name,
+                            "title": f_name.rsplit(".", 1)[0],
+                            "l4_status": sso_pkg.get("l4_status", "Approved (90%)"),
+                            "tracker_ctx": None,
+                        }
+                        st.session_state.pop("l5_sso_handoff", None)
+                        st.rerun()
+
     source_mode = st.radio(
         "Select Manuscript & Audit Verification Source:",
         [
