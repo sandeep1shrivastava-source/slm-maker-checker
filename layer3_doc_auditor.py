@@ -657,7 +657,7 @@ def extract_text_and_df_from_buffer(buf: io.BytesIO, filename: str):
     Returns (extracted_text: str, df_or_none: pd.DataFrame | None).
     """
     _mx = _try_extract_mcq_xlsx(buf, filename)
-    if _mx: return _mx
+    if _mx: return (_mx, None)
     fname = filename.lower()
     buf.seek(0)
 
