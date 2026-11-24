@@ -44,8 +44,7 @@ def _l4_build_layer5_sso_url(user_email: str, drive_id: str = "") -> str:
     return f"{base_url}/?{_l4_urlencode(params)}"
 
 
-def _l4_render_layer5_handoff_bar() -> None:
-    # Resolve active user email from session state or connected Google OAuth info
+def _l4_render_layer5_handoff_bar(location: str = "sidebar") -> None:
     active_email = ""
     for key in ("auth_email", "user_email", "logged_in_email", "oauth_user_email", "google_user_email"):
         val = st.session_state.get(key)
@@ -64,22 +63,24 @@ def _l4_render_layer5_handoff_bar() -> None:
         active_email = approved_fallback[0]
 
     l5_url = _l4_build_layer5_sso_url(active_email)
-    with st.sidebar:
-        st.divider()
-        st.markdown("### 🚀 Layer-5 Studio Bridge")
-        st.caption(f"Signed SSO handoff as: `{active_email or 'Guest'}`")
-        st.link_button(
-            "Open Layer-5 Enrichment & Book Studio ↗",
+    if location == "main":
+        c_left, c_right = st.columns([3, 1.4])
+        c_left.caption(f"Cross-Layer SSO Ready (`{active_email or 'Authenticated'}`)")
+        c_right.link_button(
+            "🚀 Open Layer-5 Studio ↗",
             url=l5_url,
             use_container_width=True,
         )
-
-
-from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow, Flow
-from googleapiclient.discovery import build
+    else:
+        with st.sidebar:
+            st.markdown("---")
+            st.markdown("**🚀 Layer-5 Studio Bridge**")
+            st.caption(f"SSO User: `{active_email or 'Guest'}`")
+            st.link_button(
+                "Open Layer-5 Enrichment & Book Studio ↗",
+                url=l5_url,
+                use_container_width=True,
+            )
 
 # ==============================================================================
 # MULTI-DRIVE OAUTH SESSION CAPTURE & CROSS-DRIVE DOWNLOADER
@@ -373,8 +374,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-_l4_render_layer5_handoff_bar()
-
 import streamlit as st
 from layer3_auth import require_team_auth, get_current_auth_token  # match your function name in layer3_auth.py
 
@@ -1979,6 +1978,7 @@ def main():
             st.caption("You can also run **Quick Single-File Audit** below using local file uploads without Drive.")
     else:
         st.success(f"✅ **Google Drive & Sheets Connected:** `{sa_email}`")
+        _l4_render_layer5_handoff_bar('main')
 
     work_mode = st.radio(
         "Select Workflow Mode:",
@@ -2549,3 +2549,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+_l4_render_layer5_handoff_bar('sidebar')
