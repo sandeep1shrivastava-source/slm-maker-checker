@@ -492,6 +492,359 @@ def parse_and_verify_audit_report(
 
 
 # ==============================================================================
+
+# ==============================================================================
+# 2B. UNIVERSITY-BRANDED LOCKED PDF REPORT GENERATORS
+# ==============================================================================
+try:
+    from fpdf import FPDF as _FPDF_BASE
+except ImportError:
+    _FPDF_BASE = None
+
+
+def _pdf_safe_text(val: str) -> str:
+    """Normalizes Unicode punctuation/symbols to clean Latin-1 safe text for PDF rendering."""
+    s = str(val or "")
+    replacements = {
+        "\u2014": "--",
+        "\u2013": "-",
+        "\u2012": "-",
+        "\u2022": "*",
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2026": "...",
+        "\u2192": "->",
+        "\u2190": "<-",
+        "\u2265": ">=",
+        "\u2264": "<=",
+        "\u2260": "!=",
+        "\u20b9": "Rs.",
+        "\u00a0": " ",
+    }
+    for k, v in replacements.items():
+        s = s.replace(k, v)
+    return s.encode("latin-1", errors="replace").decode("latin-1")
+
+
+def _fallback_plain_pdf(title: str, lines: List[str]) -> bytes:
+    """Pure-Python PDF 1.4 fallback if fpdf2 is unavailable."""
+    safe_lines = [_pdf_safe_text(title)] + [""] + [_pdf_safe_text(ln) for ln in lines]
+    pages_chunks = [safe_lines[i : i + 44] for i in range(0, max(1, len(safe_lines)), 44)]
+
+    objects: List[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>"]
+    page_ids = []
+    next_id = 4
+    page_objs = []
+
+    for chunk in pages_chunks:
+        p_id = next_id
+        c_id = next_id + 1
+        next_id += 2
+        page_ids.append(p_id)
+
+        stream_cmds = ["BT", "/F1 9.5 Tf", "45 790 Td", "14 TL"]
+        for idx_l, raw_ln in enumerate(chunk):
+            esc = raw_ln[:105].replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+            stream_cmds.append(f"({esc}) Tj" if idx_l == 0 else f"T* ({esc}) Tj")
+        stream_cmds.append("ET")
+        stream_bytes = "\n".join(stream_cmds).encode("latin-1")
+
+        page_objs.append((
+            p_id,
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {c_id} 0 R >>".encode("ascii"),
+        ))
+        page_objs.append((
+            c_id,
+            f"<< /Length {len(stream_bytes)} >>\nstream\n".encode("ascii") + stream_bytes + b"\nendstream",
+        ))
+
+    kids_str = " ".join(f"{pid} 0 R" for pid in page_ids)
+    objects.append(f"<< /Type /Pages /Kids [{kids_str}] /Count {len(page_ids)} >>".encode("ascii"))
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    for _, body in sorted(page_objs, key=lambda x: x[0]):
+        objects.append(body)
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj_num, obj_body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out.extend(f"{obj_num} 0 obj\n".encode("ascii"))
+        out.extend(obj_body)
+        out.extend(b"\nendobj\n")
+
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    out.extend(b"0000000000 65535 f \n")
+    for off in offsets[1:]:
+        out.extend(f"{off:010d} 00000 n \n".encode("ascii"))
+    out.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
+    )
+    return bytes(out)
+
+
+def _create_branded_pdf_canvas(brand_profile: Dict, report_title: str, subtitle: str):
+    """Creates an A4 FPDF instance with institutional banner header and page-numbered footer."""
+    p_rgb = _hex_to_rgb_tuple(brand_profile.get("primary_hex", "1E3A8A"), (30, 58, 138))
+    a_rgb = _hex_to_rgb_tuple(brand_profile.get("accent_hex", "D97706"), (217, 119, 6))
+    uni_name = _pdf_safe_text(brand_profile.get("university_name", "UNIVERSITY").upper())
+    school_name = _pdf_safe_text(brand_profile.get("school_name", "Centre for Distance and Online Education"))
+    safe_title = _pdf_safe_text(report_title)
+    safe_sub = _pdf_safe_text(subtitle)
+
+    class _BrandedQAPDF(_FPDF_BASE):
+        def header(self):
+            self.set_fill_color(*p_rgb)
+            self.rect(0, 0, 210, 26, style="F")
+            self.set_fill_color(*a_rgb)
+            self.rect(0, 26, 210, 1.8, style="F")
+
+            self.set_xy(12, 5)
+            self.set_font("Helvetica", "B", 11)
+            self.set_text_color(255, 255, 255)
+            self.cell(186, 5.5, uni_name[:75], ln=True)
+
+            self.set_x(12)
+            self.set_font("Helvetica", "", 8.5)
+            self.set_text_color(226, 232, 240)
+            self.cell(186, 4.5, f"{school_name[:60]}  |  {safe_title[:55]}", ln=True)
+
+            if safe_sub:
+                self.set_x(12)
+                self.set_font("Helvetica", "I", 8)
+                self.cell(186, 4.2, safe_sub[:95], ln=True)
+            self.ln(6)
+
+        def footer(self):
+            self.set_y(-13)
+            self.set_draw_color(203, 213, 225)
+            self.line(12, self.get_y(), 198, self.get_y())
+            self.set_font("Helvetica", "I", 7.5)
+            self.set_text_color(100, 116, 139)
+            self.cell(140, 6, f"Academic QA Platform (Layer-5)  |  Locked Official PDF Report  |  {uni_name[:40]}")
+            self.cell(46, 6, f"Page {self.page_no()}/{{nb}}", align="R")
+
+    pdf = _BrandedQAPDF(orientation="P", unit="mm", format="A4")
+    pdf.alias_nb_pages()
+    pdf.set_margins(12, 32, 12)
+    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.add_page()
+    return pdf, p_rgb, a_rgb
+
+
+def _pdf_section_heading(pdf, text: str, p_rgb: Tuple[int, int, int]):
+    if pdf.get_y() > 262:
+        pdf.add_page()
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*p_rgb)
+    pdf.cell(186, 6.5, _pdf_safe_text(text), ln=True)
+    pdf.set_draw_color(*p_rgb)
+    pdf.line(12, pdf.get_y(), 198, pdf.get_y())
+    pdf.ln(2.5)
+
+
+def _pdf_draw_table_row(
+    pdf,
+    col_widths: List[float],
+    values: List[str],
+    line_h: float = 4.8,
+    bold: bool = False,
+    fill_rgb: Optional[Tuple[int, int, int]] = None,
+    text_rgb: Tuple[int, int, int] = (15, 23, 42),
+):
+    pdf.set_font("Helvetica", "B" if bold else "", 8.2)
+    cleaned_vals = [_pdf_safe_text(str(v or "")) for v in values]
+    max_lines = 1
+    for w, txt in zip(col_widths, cleaned_vals):
+        usable_w = max(w - 3.0, 8.0)
+        lines_cnt = 0
+        for raw_ln in txt.split("\n"):
+            sw = pdf.get_string_width(raw_ln)
+            lines_cnt += max(1, int(math.ceil((sw + 1.2) / usable_w)))
+        if lines_cnt > max_lines:
+            max_lines = lines_cnt
+    row_h = (max_lines + 0.25) * line_h + 2.5
+
+    if pdf.get_y() + row_h > pdf.h - pdf.b_margin:
+        pdf.add_page()
+
+    x_start = pdf.get_x()
+    y_start = pdf.get_y()
+    if fill_rgb:
+        pdf.set_fill_color(*fill_rgb)
+    pdf.set_draw_color(203, 213, 225)
+    pdf.set_text_color(*text_rgb)
+
+    curr_x = x_start
+    for w, txt in zip(col_widths, cleaned_vals):
+        pdf.rect(curr_x, y_start, w, row_h, style="DF" if fill_rgb else "D")
+        pdf.set_xy(curr_x + 1.5, y_start + 1.3)
+        pdf.multi_cell(w - 3.0, line_h, txt, border=0, align="L")
+        curr_x += w
+
+    pdf.set_xy(x_start, y_start + row_h)
+
+
+def compile_remediation_report_pdf(
+    approved_items: List[Dict],
+    manuscript_title: str,
+    reviewer_email: str,
+    brand_profile: Optional[Dict] = None,
+    audit_verified: bool = True,
+) -> bytes:
+    """Compiles Track A remediation deliverables into a locked, university-branded PDF report."""
+    bp = brand_profile or {}
+    status_label = "APPROVED (AUDIT VERIFIED)" if audit_verified else "PRE-AUDIT REMEDIATION REPORT (SUBMIT TO LAYER-4+)"
+    ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    if _FPDF_BASE is None:
+        flat_lines = [
+            f"Manuscript: {manuscript_title}",
+            f"Status: {status_label} | Reviewed By: {reviewer_email} | {ts_str}",
+        ]
+        for it in approved_items:
+            flat_lines.append(f"[{it.get('asset_type', '')}] {it.get('summary', '')}")
+            flat_lines.append(json.dumps(it.get("data", {}), default=str)[:300])
+        return _fallback_plain_pdf(f"Layer-5 Remediation Report - {manuscript_title}", flat_lines)
+
+    pdf, p_rgb, _ = _create_branded_pdf_canvas(
+        bp,
+        report_title="Layer-5 Academic Remediation & QA Report (Track A)",
+        subtitle=f"Target Manuscript: {manuscript_title}",
+    )
+    tint_rgb = _hex_to_rgb_tuple(_tint_hex(bp.get("primary_hex", "1E3A8A"), 0.90), (239, 246, 255))
+
+    _pdf_draw_table_row(pdf, [48, 138], ["Target Manuscript", manuscript_title], bold=True, fill_rgb=tint_rgb)
+    _pdf_draw_table_row(pdf, [48, 138], ["Governance Status", status_label], bold=True)
+    _pdf_draw_table_row(pdf, [48, 138], ["Verified By & Timestamp", f"{reviewer_email}  |  {ts_str}"])
+
+    for item in approved_items:
+        atype = item.get("asset_type", "")
+        data = item.get("data", {})
+
+        if atype == "High-Burstiness Prose Rewrite":
+            _pdf_section_heading(pdf, f"High-Burstiness Prose Rewrite ({item.get('anchor', '')})", p_rgb)
+            _pdf_draw_table_row(
+                pdf,
+                [93, 93],
+                [
+                    f"BEFORE REWRITE (CV: {data.get('before_cv', 0):.3f})",
+                    f"VERIFIED REWRITE (CV: {data.get('after_cv', 0):.3f})",
+                ],
+                bold=True,
+                fill_rgb=p_rgb,
+                text_rgb=(255, 255, 255),
+            )
+            _pdf_draw_table_row(pdf, [93, 93], [data.get("original", ""), data.get("rewritten", "")])
+
+        elif atype == "CYP Box + Model Answer Key":
+            _pdf_section_heading(
+                pdf,
+                f"{data.get('title', 'Check Your Progress')} [Bloom: {data.get('bloom_level', 'Analyze')}]",
+                p_rgb,
+            )
+            _pdf_draw_table_row(
+                pdf,
+                [16, 85, 85],
+                ["#", "Self-Assessment Question", "Model Answer Key"],
+                bold=True,
+                fill_rgb=p_rgb,
+                text_rgb=(255, 255, 255),
+            )
+            qs = data.get("questions", [])
+            ans = data.get("answers", [])
+            for i in range(max(len(qs), len(ans))):
+                _pdf_draw_table_row(
+                    pdf,
+                    [16, 85, 85],
+                    [f"Q{i + 1}", qs[i] if i < len(qs) else "", ans[i] if i < len(ans) else ""],
+                )
+
+        elif atype == "Unit Glossary Table":
+            _pdf_section_heading(pdf, "Unit Technical Glossary", p_rgb)
+            _pdf_draw_table_row(
+                pdf,
+                [56, 130],
+                ["Domain Term", "Standalone Definition"],
+                bold=True,
+                fill_rgb=p_rgb,
+                text_rgb=(255, 255, 255),
+            )
+            for entry in data:
+                _pdf_draw_table_row(pdf, [56, 130], [str(entry.get("term", "")), str(entry.get("definition", ""))])
+
+        elif atype == "Mermaid.js Diagram Spec":
+            _pdf_section_heading(pdf, f"{data.get('figure_id', 'Figure')}: {data.get('title', '')}", p_rgb)
+            _pdf_draw_table_row(pdf, [46, 140], ["Placement Anchor", str(data.get("anchor", ""))], fill_rgb=tint_rgb)
+            _pdf_draw_table_row(pdf, [46, 140], ["Accessible Alt-Text", str(data.get("alt_text", ""))])
+            _pdf_draw_table_row(pdf, [46, 140], ["Mermaid Specification", str(data.get("mermaid_code", ""))])
+
+    return bytes(pdf.output())
+
+
+def compile_enrichment_audit_pdf(
+    manuscript_title: str,
+    audit_verification: Dict,
+    approved_items: List[Dict],
+    reviewer_email: str,
+    brand_profile: Optional[Dict] = None,
+    extra_notes: str = "",
+) -> bytes:
+    """Generates a locked PDF Enrichment & Governance Audit Trail Report for Track B outputs."""
+    bp = brand_profile or {}
+    ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    if _FPDF_BASE is None:
+        lines = [
+            f"Manuscript: {manuscript_title}",
+            f"Source Audit Report: {audit_verification.get('report_filename', 'Verified')} ({audit_verification.get('audit_score', 0):.1f}%)",
+            f"Approved Assets Injected: {len(approved_items)} | Signed Off By: {reviewer_email} | {ts_str}",
+        ]
+        return _fallback_plain_pdf(f"Layer-5 Enrichment Audit Report - {manuscript_title}", lines)
+
+    pdf, p_rgb, _ = _create_branded_pdf_canvas(
+        bp,
+        report_title="Layer-5 Post-Audit Creative Enrichment QA Report (Track B)",
+        subtitle=f"Enriched Deliverable: {manuscript_title}",
+    )
+    tint_rgb = _hex_to_rgb_tuple(_tint_hex(bp.get("primary_hex", "1E3A8A"), 0.90), (239, 246, 255))
+
+    _pdf_draw_table_row(pdf, [52, 134], ["Enriched Manuscript", manuscript_title], bold=True, fill_rgb=tint_rgb)
+    _pdf_draw_table_row(
+        pdf,
+        [52, 134],
+        [
+            "Verified Audit Checkpoint",
+            f"{audit_verification.get('report_filename', 'Verified')}  |  Score: {audit_verification.get('audit_score', 0):.1f}% ({audit_verification.get('audit_status', 'Approved')})",
+        ],
+    )
+    _pdf_draw_table_row(pdf, [52, 134], ["L5 Reviewer Sign-Off", f"{reviewer_email}  |  {ts_str}"], bold=True)
+    if extra_notes:
+        _pdf_draw_table_row(pdf, [52, 134], ["Execution Summary", extra_notes])
+
+    if approved_items:
+        _pdf_section_heading(pdf, f"Approved Enrichment Assets Injected ({len(approved_items)} Item(s))", p_rgb)
+        _pdf_draw_table_row(
+            pdf,
+            [14, 58, 44, 70],
+            ["#", "Asset Category", "Insertion Anchor", "Content Summary"],
+            bold=True,
+            fill_rgb=p_rgb,
+            text_rgb=(255, 255, 255),
+        )
+        for idx, it in enumerate(approved_items, start=1):
+            _pdf_draw_table_row(
+                pdf,
+                [14, 58, 44, 70],
+                [str(idx), it.get("asset_type", ""), it.get("anchor", ""), it.get("summary", "")],
+            )
+
+    return bytes(pdf.output())
+
+
 # 3. ASPECT 3: SUBJECT-WIDE CUMULATIVE QA & ENRICHMENT REPORT ENGINE
 # ==============================================================================
 
@@ -676,92 +1029,94 @@ def compile_subject_cumulative_dossier(
     wb.save(xl_buf)
 
     # --------------------------------------------------------------------------
-    # 2. BUILD PRINTABLE SUBJECT CUMULATIVE CERTIFICATE (.docx)
+    # 2. BUILD LOCKED SUBJECT CUMULATIVE QA RELEASE CERTIFICATE (.pdf)
     # --------------------------------------------------------------------------
-    p_rgb = RGBColor(*_hex_to_rgb_tuple(p_hex))
-    a_rgb = RGBColor(*_hex_to_rgb_tuple(a_hex))
+    ts_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    if _FPDF_BASE is None:
+        fb_lines = [
+            f"Program: {prog_name} ({acad_term})",
+            f"Subject: {subj_code} - {subj_name}",
+            f"Composite Score: {composite_score:.1f}% | Verdict: {subject_verdict}",
+            f"Signed Off By: {reviewer_email} | {ts_str}",
+        ]
+        cert_pdf_bytes = _fallback_plain_pdf(f"Subject Cumulative QA Report - {subj_code}", fb_lines)
+    else:
+        pdf, p_rgb, _ = _create_branded_pdf_canvas(
+            brand_profile,
+            report_title="Subject-Wide Cumulative QA & Enrichment Dossier",
+            subtitle=f"{subj_code}: {subj_name}  |  {prog_name} ({acad_term})",
+        )
+        tint_rgb = _hex_to_rgb_tuple(_tint_hex(p_hex, 0.90), (239, 246, 255))
 
-    cert = docx.Document()
-    p_lg = cert.add_paragraph()
-    p_lg.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p_lg.add_run().add_picture(io.BytesIO(logo_bytes), width=Inches(1.1))
+        _pdf_draw_table_row(pdf, [52, 134], ["Program & Cohort", f"{prog_name} ({acad_term})"], fill_rgb=tint_rgb)
+        _pdf_draw_table_row(pdf, [52, 134], ["Subject Code & Title", f"{subj_code} -- {subj_name}"], bold=True)
+        _pdf_draw_table_row(pdf, [52, 134], ["Composite QA Score & Verdict", f"{composite_score:.1f}%  |  {subject_verdict}"], bold=True, fill_rgb=tint_rgb)
+        _pdf_draw_table_row(pdf, [52, 134], ["IQAC / Layer-5 Sign-Off", f"{reviewer_email}  |  {ts_str}"])
 
-    p_u = cert.add_paragraph()
-    p_u.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    ru = p_u.add_run(uni_name)
-    ru.bold = True
-    ru.font.size = Pt(16)
-    ru.font.color.rgb = p_rgb
+        _pdf_section_heading(pdf, "1. Multi-Deliverable Readiness Matrix (SLM, MCQ, QB, PPT, FAQ)", p_rgb)
+        _pdf_draw_table_row(
+            pdf,
+            [24, 20, 22, 26, 28, 28, 38],
+            ["Asset", "Files", "Approved", "Avg Score", "Max Sim.", "Max AI", "Readiness Status"],
+            bold=True,
+            fill_rgb=p_rgb,
+            text_rgb=(255, 255, 255),
+        )
+        for crow in cat_summary_rows:
+            _pdf_draw_table_row(
+                pdf,
+                [24, 20, 22, 26, 28, 28, 38],
+                [
+                    crow["Deliverable_Category"],
+                    str(crow["Files_Evaluated"]),
+                    str(crow["Approved_Count"]),
+                    str(crow["Avg_QA_Score_Pct"]),
+                    str(crow["Max_Similarity_Pct"]),
+                    str(crow["Max_AI_Content_Pct"]),
+                    str(crow["Category_Status"]),
+                ],
+            )
 
-    p_s = cert.add_paragraph()
-    p_s.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    rs = p_s.add_run(school_name)
-    rs.bold = True
-    rs.font.size = Pt(11)
+        _pdf_section_heading(pdf, "2. Evaluated Subject Deliverables & Layer-5 Routing Log", p_rgb)
+        _pdf_draw_table_row(
+            pdf,
+            [20, 66, 22, 30, 48],
+            ["Type", "Audit Report Filename", "Score", "Verdict", "Layer-5 State"],
+            bold=True,
+            fill_rgb=p_rgb,
+            text_rgb=(255, 255, 255),
+        )
+        for r in parsed_reports:
+            _pdf_draw_table_row(
+                pdf,
+                [20, 66, 22, 30, 48],
+                [
+                    r["deliverable_type"],
+                    r["report_filename"],
+                    f"{r['audit_score']:.1f}%",
+                    r["audit_status"],
+                    r["l5_enrichment_state"],
+                ],
+            )
 
-    h_main = cert.add_heading(f"Subject-Wide Cumulative QA & Enrichment Dossier", level=1)
-    h_main.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    h_main.runs[0].font.color.rgb = p_rgb
+        _pdf_section_heading(pdf, "3. Consolidated Parameter-by-Parameter Evaluation Ledger", p_rgb)
+        _pdf_draw_table_row(
+            pdf,
+            [20, 62, 34, 28, 42],
+            ["Type", "Evaluated Parameter", "Score / Value", "Status", "Remarks"],
+            bold=True,
+            fill_rgb=p_rgb,
+            text_rgb=(255, 255, 255),
+        )
+        ledger_rows = param_rows[:60] if param_rows else [["ALL", "All Subject Parameters", f"{composite_score:.1f}%", subject_verdict, "Verified"]]
+        for pr in ledger_rows:
+            _pdf_draw_table_row(
+                pdf,
+                [20, 62, 34, 28, 42],
+                [str(pr[0]), str(pr[2]), str(pr[3]), str(pr[4]), str(pr[5])],
+            )
 
-    meta_tbl = cert.add_table(rows=3, cols=2)
-    meta_tbl.style = "Table Grid"
-    meta_tbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-    meta_pairs = [
-        ("Program & Cohort", f"{prog_name} ({acad_term})"),
-        ("Course Code & Subject", f"{subj_code} — {subj_name}"),
-        ("Composite Score & Verdict", f"{composite_score:.1f}%  |  {subject_verdict}"),
-    ]
-    for idx_m, (mk, mv) in enumerate(meta_pairs):
-        _set_cell_shading_and_border(meta_tbl.cell(idx_m, 0), _tint_hex(p_hex, 0.88))
-        meta_tbl.cell(idx_m, 0).paragraphs[0].add_run(mk).bold = True
-        meta_tbl.cell(idx_m, 1).paragraphs[0].add_run(mv).bold = (idx_m == 2)
-
-    h_cat = cert.add_heading("1. Multi-Deliverable Readiness Matrix (SLM, MCQ, QB, PPT, FAQ)", level=2)
-    h_cat.runs[0].font.color.rgb = p_rgb
-    ctbl = cert.add_table(rows=1, cols=6)
-    ctbl.style = "Table Grid"
-    ctbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-    c_hdrs = ["Asset Type", "Files", "Approved", "Avg Score", "Max Similarity", "Readiness Status"]
-    for ci, ch in enumerate(c_hdrs):
-        _set_cell_shading_and_border(ctbl.cell(0, ci), _tint_hex(p_hex, 0.85))
-        ctbl.cell(0, ci).paragraphs[0].add_run(ch).bold = True
-    for crow in cat_summary_rows:
-        rc = ctbl.add_row().cells
-        rc[0].paragraphs[0].add_run(crow["Deliverable_Category"]).bold = True
-        rc[1].text = str(crow["Files_Evaluated"])
-        rc[2].text = str(crow["Approved_Count"])
-        rc[3].text = str(crow["Avg_QA_Score_Pct"])
-        rc[4].text = str(crow["Max_Similarity_Pct"])
-        rc[5].paragraphs[0].add_run(crow["Category_Status"]).bold = True
-
-    h_inv = cert.add_heading("2. Evaluated Subject Deliverables & Layer-5 Routing Log", level=2)
-    h_inv.runs[0].font.color.rgb = p_rgb
-    itbl = cert.add_table(rows=1, cols=5)
-    itbl.style = "Table Grid"
-    itbl.alignment = WD_TABLE_ALIGNMENT.CENTER
-    i_hdrs = ["Type", "Audit Report", "Score", "Verdict", "Layer-5 State"]
-    for ci, ih in enumerate(i_hdrs):
-        _set_cell_shading_and_border(itbl.cell(0, ci), _tint_hex(p_hex, 0.85))
-        itbl.cell(0, ci).paragraphs[0].add_run(ih).bold = True
-    for r in parsed_reports:
-        rc = itbl.add_row().cells
-        rc[0].paragraphs[0].add_run(r["deliverable_type"]).bold = True
-        rc[1].text = r["report_filename"]
-        rc[2].text = f"{r['audit_score']:.1f}%"
-        rc[3].text = r["audit_status"]
-        rc[4].text = r["l5_enrichment_state"]
-
-    p_sig = cert.add_paragraph()
-    p_sig.paragraph_format.space_before = Pt(14)
-    r_sg = p_sig.add_run(
-        f"IQAC / Layer-5 Sign-Off: {reviewer_email}  |  "
-        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-    )
-    r_sg.bold = True
-    r_sg.font.color.rgb = a_rgb
-
-    doc_buf = io.BytesIO()
-    cert.save(doc_buf)
+        cert_pdf_bytes = bytes(pdf.output())
 
     summary_dict = {
         "total_files": total_files,
@@ -774,7 +1129,7 @@ def compile_subject_cumulative_dossier(
         "parameter_rows": param_rows,
         "defect_rows": def_rows,
     }
-    return xl_buf.getvalue(), doc_buf.getvalue(), summary_dict
+    return xl_buf.getvalue(), cert_pdf_bytes, summary_dict
 
 
 # ==============================================================================

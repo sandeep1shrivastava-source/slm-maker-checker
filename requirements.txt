@@ -11,3 +11,4 @@ google-auth-httplib2
 python-pptx
 qrcode
 pillow
+fpdf2

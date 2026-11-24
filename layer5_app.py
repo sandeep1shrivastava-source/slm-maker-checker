@@ -27,6 +27,8 @@ from layer5_engine import (
     classify_deliverable_category,
     compile_approved_enriched_docx,
     compile_approved_fixit_patch_docx,
+    compile_enrichment_audit_pdf,
+    compile_remediation_report_pdf,
     compile_complete_slm_book_docx,
     compile_subject_cumulative_dossier,
     compute_prose_cv_3dec,
@@ -639,10 +641,11 @@ def main():
                 type="primary",
             )
             dl2.download_button(
-                f"📜 Download Subject QA Release Certificate ({sdos['code']}_Release_Certificate.docx)",
+                f"📕 Download Subject Cumulative QA Report ({sdos['code']}_Subject_QA_Report.pdf)",
                 data=sdos["cert_bytes"],
-                file_name=f"{sdos['code']}_Subject_QA_Release_Certificate.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                file_name=f"{sdos['code']}_Subject_Cumulative_QA_Report.pdf",
+                mime="application/pdf",
+                type="primary",
             )
         st.stop()
 
@@ -1000,10 +1003,20 @@ def main():
             tr_style = st.selectbox("Slide Transition Style:", ["fade", "push"])
             if st.button("✨ Apply Native XML Slide Animations (Track B Phase 1 — ₹0)", type="primary"):
                 pptx_out, pptx_meta = enrich_pptx_with_native_animations(ms_bytes, current_user, transition_style=tr_style)
+                enr_pdf = compile_enrichment_audit_pdf(
+                    manuscript_title=ms_filename,
+                    audit_verification=audit_verification,
+                    approved_items=[],
+                    reviewer_email=current_user,
+                    brand_profile=brand,
+                    extra_notes=f"Animated {pptx_meta['animated_shapes']} shapes across {pptx_meta['slides_processed']} slides.",
+                )
                 st.session_state["l5_compiled"] = {
                     "bytes": pptx_out,
                     "filename": f"{ms_title}_Enriched_Approved.pptx",
                     "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    "report_pdf_bytes": enr_pdf,
+                    "report_pdf_name": f"{ms_title}_Enrichment_QA_Report.pdf",
                     "summary": f"Animated {pptx_meta['animated_shapes']} shapes across {pptx_meta['slides_processed']} slides.",
                 }
                 st.session_state["l5_staged_items"] = []
@@ -1073,29 +1086,57 @@ def main():
                 if track == "TRACK_B_DOCX" and ms_filename.lower().endswith(".docx"):
                     out_bytes = compile_approved_enriched_docx(ms_bytes, approved_items, current_user, brand_profile=brand)
                     out_name = f"{ms_title}_Enriched_Approved.docx"
+                    enr_pdf = compile_enrichment_audit_pdf(
+                        manuscript_title=ms_filename,
+                        audit_verification=audit_verification,
+                        approved_items=approved_items,
+                        reviewer_email=current_user,
+                        brand_profile=brand,
+                    )
+                    st.session_state["l5_compiled"] = {
+                        "bytes": out_bytes,
+                        "filename": out_name,
+                        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "report_pdf_bytes": enr_pdf,
+                        "report_pdf_name": f"{ms_title}_Enrichment_QA_Report.pdf",
+                        "summary": f"{len(approved_items)} approved enrichment asset(s) compiled.",
+                    }
                 else:
                     has_report = audit_verification["report_filename"] != "None Uploaded"
-                    out_bytes = compile_approved_fixit_patch_docx(approved_items, ms_title, current_user, brand_profile=brand, audit_verified=has_report)
-                    suffix = "_FixIt_Patch_Approved.docx" if has_report else "_FixIt_Patch_PreAudit_Draft.docx"
-                    out_name = f"{ms_title}{suffix}"
-
-                st.session_state["l5_compiled"] = {
-                    "bytes": out_bytes,
-                    "filename": out_name,
-                    "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    "summary": f"{len(approved_items)} approved item(s) compiled.",
-                }
+                    pdf_bytes = compile_remediation_report_pdf(
+                        approved_items=approved_items,
+                        manuscript_title=ms_title,
+                        reviewer_email=current_user,
+                        brand_profile=brand,
+                        audit_verified=has_report,
+                    )
+                    suffix = "_Remediation_Report_Approved.pdf" if has_report else "_Remediation_Report_PreAudit.pdf"
+                    st.session_state["l5_compiled"] = {
+                        "bytes": pdf_bytes,
+                        "filename": f"{ms_title}{suffix}",
+                        "mime": "application/pdf",
+                        "summary": f"{len(approved_items)} approved remediation item(s) compiled into locked PDF report.",
+                    }
 
     compiled = st.session_state.get("l5_compiled")
     if compiled:
         st.divider()
         st.subheader("🔏 Governance Sign-Off & Drive / Master Tracker Archival")
-        st.download_button(
-            f"📥 Download Cloned Artifact ({compiled['filename']})",
+        dl_c1, dl_c2 = st.columns(2)
+        dl_c1.download_button(
+            f"📥 Download {compiled['filename']}",
             data=compiled["bytes"],
             file_name=compiled["filename"],
             mime=compiled["mime"],
+            type="primary",
         )
+        if compiled.get("report_pdf_bytes"):
+            dl_c2.download_button(
+                f"📕 Download Locked QA Report ({compiled['report_pdf_name']})",
+                data=compiled["report_pdf_bytes"],
+                file_name=compiled["report_pdf_name"],
+                mime="application/pdf",
+            )
 
         with st.form("l5_governance_signoff_form"):
             approver_name = st.text_input("Explicit Human Reviewer Sign-Off (`L5_Approved_By`):", value=current_user).strip()
