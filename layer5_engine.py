@@ -180,7 +180,39 @@ def _extract_report_raw_structures(report_bytes: bytes, report_filename: str) ->
     rows_out: List[Dict] = []
     kv_params: Dict[str, str] = {}
 
-    if fn.endswith(".xlsx"):
+    if fn.endswith(".docx"):
+        doc = docx.Document(io.BytesIO(report_bytes))
+        for p in doc.paragraphs:
+            txt = re.sub(r"\s+", " ", p.text or "").strip()
+            if not txt:
+                continue
+            text_parts.append(txt)
+            if ":" in txt:
+                k_part, v_part = txt.split(":", 1)
+                if 2 <= len(k_part.strip()) <= 65 and v_part.strip():
+                    kv_params[k_part.strip()] = v_part.strip()
+
+        for t_idx, tbl in enumerate(doc.tables, start=1):
+            t_rows = []
+            for r in tbl.rows:
+                row_vals = [re.sub(r"\s+", " ", c.text or "").strip() for c in r.cells]
+                t_rows.append(row_vals)
+                non_empty = [v for v in row_vals if v]
+                if non_empty:
+                    text_parts.append(" | ".join(non_empty))
+                if len(row_vals) >= 2 and row_vals[0] and row_vals[1] and len(row_vals[0]) <= 65:
+                    kv_params[row_vals[0]] = row_vals[1]
+
+            if len(t_rows) >= 2:
+                headers = [h if h else f"Col_{i+1}" for i, h in enumerate(t_rows[0])]
+                for r_vals in t_rows[1:]:
+                    if any(v for v in r_vals):
+                        row_dict = {"_sheet": f"Table_{t_idx}"}
+                        for ci, h_name in enumerate(headers):
+                            row_dict[h_name] = r_vals[ci] if ci < len(r_vals) else ""
+                        rows_out.append(row_dict)
+
+    elif fn.endswith(".xlsx"):
         wb = openpyxl.load_workbook(io.BytesIO(report_bytes), data_only=True)
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]

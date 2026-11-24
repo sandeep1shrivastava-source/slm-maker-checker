@@ -532,7 +532,7 @@ def main():
     if aspect_mode.startswith("📊"):
         st.subheader("📊 Subject-Wide Cumulative QA & Enrichment Report (SLM, MCQ, QB, PPT, FAQ)")
         st.info(
-            "Upload all Layer-4 / Layer-4+ Audit Review Reports (`.xlsx`, `.pdf`, `.csv`, `.json`) across an entire subject "
+            "Upload all Layer-4 / Layer-4+ Audit Review Reports (`.docx`, `.xlsx`, `.pdf`, `.csv`, `.json`) across an entire subject "
             "(**SLM** units, **MCQ** banks, **QB** subjective banks, **PPT** decks, **FAQ** sheets) to aggregate every "
             "evaluated parameter into a unified Subject Readiness Dossier and Release Certificate."
         )
@@ -544,8 +544,8 @@ def main():
         s_term = sc4.text_input("Cohort / Academic Year:", value="2026 Cohort", key="subj_term")
 
         rep_uploads = st.file_uploader(
-            "Upload All Subject Audit Review Reports (SLM, MCQ, QB, PPT, FAQ — .xlsx / .pdf / .csv / .json):",
-            type=["xlsx", "pdf", "csv", "json"],
+            "Upload All Subject Audit Review Reports (SLM, MCQ, QB, PPT, FAQ — .docx / .xlsx / .pdf / .csv / .json):",
+            type=["docx", "xlsx", "pdf", "csv", "json"],
             accept_multiple_files=True,
             key="subj_rep_uploader",
         )
@@ -790,8 +790,8 @@ def main():
             up_ms = st.file_uploader("1. Upload Manuscript (.docx or .pptx):", type=["docx", "pptx"], key="l5_ms_up")
         with u_col2:
             up_rep = st.file_uploader(
-                "2. Upload Layer-4 / Layer-4+ Audit Review Report (.xlsx, .pdf, .csv, .json):",
-                type=["xlsx", "pdf", "csv", "json"],
+                "2. Upload Layer-4 / Layer-4+ Audit Review Report (.docx, .xlsx, .pdf, .csv, .json):",
+                type=["docx", "xlsx", "pdf", "csv", "json"],
                 key="l5_rep_up",
                 help="Mandatory checkpoint to unlock Track B Creative Enrichment. Without a verified Approved report, only Pre-Audit Track A Remediation is permitted.",
             )
