@@ -103,27 +103,21 @@ def _l4_build_layer5_sso_url(user_email: str, drive_id: str = "") -> str:
     return f"{base_url}/?{_l4_urlencode(params)}"
 
 
-def _l4_render_layer5_handoff_bar() -> None:
-    active_email = ""
+def _l4_resolve_sso_email() -> str:
     for key in ("auth_email", "user_email", "logged_in_email", "oauth_user_email", "google_user_email"):
         val = st.session_state.get(key)
         if isinstance(val, str) and "@" in val:
-            active_email = val.strip().lower()
-            break
-
-    if not active_email:
-        for _, val in list(st.session_state.items()):
-            if isinstance(val, str) and "@" in val and "." in val.split("@")[-1] and len(val) < 80:
-                active_email = val.strip().lower()
-                break
-
+            return val.strip().lower()
+    for _, val in list(st.session_state.items()):
+        if isinstance(val, str) and "@" in val and "." in val.split("@")[-1] and len(val) < 80:
+            return val.strip().lower()
     approved_fallback = [str(e).strip().lower() for e in st.secrets.get("APPROVED_EMAILS", []) if "@" in str(e)]
-    if not active_email and approved_fallback:
-        active_email = approved_fallback[0]
+    return approved_fallback[0] if approved_fallback else ""
 
+
+def _l4_render_layer5_sidebar_bridge() -> None:
+    active_email = _l4_resolve_sso_email()
     l5_url = _l4_build_layer5_sso_url(active_email)
-
-    # 1. Sidebar Bridge (renders unconditionally on every rerun)
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🚀 Layer-5 Studio Bridge")
     st.sidebar.caption(f"SSO User: `{active_email or 'Authenticated'}`")
@@ -132,15 +126,23 @@ def _l4_render_layer5_handoff_bar() -> None:
         url=l5_url,
         use_container_width=True,
     )
+    st.sidebar.markdown("---")
 
-    # 2. Main Dashboard Bridge (directly above Select Workflow Mode)
+
+def _l4_render_layer5_main_bridge() -> None:
+    active_email = _l4_resolve_sso_email()
+    l5_url = _l4_build_layer5_sso_url(active_email)
     b_col1, b_col2 = st.columns([3.2, 1.5])
-    b_col1.info(f"🚀 **Cross-Layer Handoff Ready** — Launch Layer-5 Studio signed in as `{active_email or 'Authenticated'}`")
+    b_col1.info(
+        f"🚀 **Cross-Layer Handoff Ready** — Launch Layer-5 Studio signed in as `{active_email or 'Authenticated'}`"
+    )
     b_col2.link_button(
         "Open Layer-5 Studio ↗",
         url=l5_url,
         use_container_width=True,
     )
+
+
 
 # ==============================================================================
 # MULTI-DRIVE OAUTH SESSION CAPTURE & CROSS-DRIVE DOWNLOADER
@@ -1959,6 +1961,7 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
+    _l4_render_layer5_sidebar_bridge()
     st.sidebar.header("⚙️ Layer-3 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
@@ -2039,7 +2042,7 @@ def main():
     else:
         st.success(f"✅ **Google Drive & Sheets Connected:** `{sa_email}`")
 
-    _l4_render_layer5_handoff_bar()
+    _l4_render_layer5_main_bridge()
     work_mode = st.radio(
         "Select Workflow Mode:",
         options=[
