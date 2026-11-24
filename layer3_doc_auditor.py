@@ -18,6 +18,63 @@ from docx.oxml.ns import qn
 import pypdf
 import streamlit as st
 
+# ==============================================================================
+# CROSS-APP SSO BRIDGE: 1-CLICK HANDOFF FROM LAYER-4 TO LAYER-5 STUDIO
+# ==============================================================================
+import hashlib as _l4_hashlib
+import hmac as _l4_hmac
+import time as _l4_time
+from urllib.parse import urlencode as _l4_urlencode
+
+
+def _l4_build_layer5_sso_url(user_email: str, drive_id: str = "") -> str:
+    base_url = str(st.secrets.get("LAYER5_APP_URL", "https://slm-maker-checker-ad99-layer5.streamlit.app")).rstrip("/")
+    secret = str(st.secrets.get("SSO_SECRET", "")).strip()
+    sso_user = str(user_email or "").strip().lower()
+    if not secret or not sso_user:
+        return base_url
+
+    exp = str(int(_l4_time.time()) + 900)  # 15-minute signed SSO handoff window
+    raw_msg = f"{sso_user}:{exp}"
+    sig = _l4_hmac.new(secret.encode("utf-8"), raw_msg.encode("utf-8"), _l4_hashlib.sha256).hexdigest()
+
+    params = {"sso_user": sso_user, "exp": exp, "sig": sig}
+    if drive_id:
+        params["drive_id"] = str(drive_id).strip()
+    return f"{base_url}/?{_l4_urlencode(params)}"
+
+
+def _l4_render_layer5_handoff_bar() -> None:
+    # Resolve active user email from session state or connected Google OAuth info
+    active_email = ""
+    for key in ("auth_email", "user_email", "logged_in_email", "oauth_user_email", "google_user_email"):
+        val = st.session_state.get(key)
+        if isinstance(val, str) and "@" in val:
+            active_email = val.strip().lower()
+            break
+
+    if not active_email:
+        for _, val in list(st.session_state.items()):
+            if isinstance(val, str) and "@" in val and "." in val.split("@")[-1] and len(val) < 80:
+                active_email = val.strip().lower()
+                break
+
+    approved_fallback = [str(e).strip().lower() for e in st.secrets.get("APPROVED_EMAILS", []) if "@" in str(e)]
+    if not active_email and approved_fallback:
+        active_email = approved_fallback[0]
+
+    l5_url = _l4_build_layer5_sso_url(active_email)
+    with st.sidebar:
+        st.divider()
+        st.markdown("### 🚀 Layer-5 Studio Bridge")
+        st.caption(f"Signed SSO handoff as: `{active_email or 'Guest'}`")
+        st.link_button(
+            "Open Layer-5 Enrichment & Book Studio ↗",
+            url=l5_url,
+            use_container_width=True,
+        )
+
+
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -316,6 +373,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+_l4_render_layer5_handoff_bar()
 
 import streamlit as st
 from layer3_auth import require_team_auth, get_current_auth_token  # match your function name in layer3_auth.py
