@@ -16,6 +16,65 @@ import pandas as pd
 import pypdf
 import requests
 import streamlit as st
+
+# ==============================================================================
+# STRICT EMAIL-ONLY OTP SECURITY POLICY (NO DEFAULT/FALLBACK CODES)
+# ==============================================================================
+import secrets as _otp_secrets
+import time as _otp_time
+
+_BLOCKED_TRIVIAL_OTPS = {"000000", "111111", "654321", "999999"}
+
+
+def _generate_strict_email_otp() -> str:
+    """Generates a cryptographically random 6-digit OTP excluding trivial sequences."""
+    while True:
+        code = str(_otp_secrets.randbelow(900000) + 100000)
+        if code not in _BLOCKED_TRIVIAL_OTPS:
+            return code
+
+
+def _verify_strict_email_otp(
+    entered_code: str,
+    expected_code: str,
+    created_ts: float = 0.0,
+    max_age_sec: int = 900,
+    email_key: str = "default",
+) -> tuple[bool, str]:
+    """
+    Enforces strict email-only OTP rules:
+      1. Rejects empty or trivial codes (including "")
+      2. Enforces 15-minute (900s) expiration window
+      3. Locks and invalidates OTP after 3 failed attempts
+      4. Uses constant-time comparison (secrets.compare_digest)
+    """
+    clean_entered = re.sub(r"\D", "", str(entered_code or ""))
+    clean_expected = re.sub(r"\D", "", str(expected_code or ""))
+
+    if len(clean_entered) != 6 or clean_entered in _BLOCKED_TRIVIAL_OTPS:
+        return False, "Invalid OTP. Enter the 6-digit code sent to your institutional email."
+
+    if len(clean_expected) != 6 or clean_expected in _BLOCKED_TRIVIAL_OTPS:
+        return False, "No active email OTP found. Click 'Send 6-Digit OTP' to receive a code via email."
+
+    if created_ts and (_otp_time.time() - float(created_ts)) > max_age_sec:
+        return False, "This OTP has expired (15-minute limit). Request a new OTP via email."
+
+    attempts_map = st.session_state.setdefault("_strict_otp_attempts", {})
+    fails = int(attempts_map.get(email_key, 0))
+    if fails >= 3:
+        return False, "Maximum verification attempts (3) exceeded. Request a new OTP via email."
+
+    if not _otp_secrets.compare_digest(clean_entered, clean_expected):
+        attempts_map[email_key] = fails + 1
+        remaining = max(0, 3 - (fails + 1))
+        if remaining == 0:
+            return False, "Too many incorrect attempts. This OTP is now locked—request a new email OTP."
+        return False, f"Incorrect OTP. {remaining} attempt(s) remaining before lockout."
+
+    attempts_map[email_key] = 0
+    return True, "Email OTP verified."
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
