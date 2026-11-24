@@ -45,10 +45,6 @@ def _l4_build_layer5_sso_url(user_email: str, drive_id: str = "") -> str:
 
 
 def _l4_render_layer5_handoff_bar() -> None:
-    if st.session_state.get("_l4_l5_bridge_rendered_this_run"):
-        return
-    st.session_state["_l4_l5_bridge_rendered_this_run"] = True
-
     active_email = ""
     for key in ("auth_email", "user_email", "logged_in_email", "oauth_user_email", "google_user_email"):
         val = st.session_state.get(key)
@@ -68,18 +64,17 @@ def _l4_render_layer5_handoff_bar() -> None:
 
     l5_url = _l4_build_layer5_sso_url(active_email)
 
-    # 1. Sidebar Launcher
-    with st.sidebar:
-        st.markdown("---")
-        st.markdown("### 🚀 Layer-5 Studio Bridge")
-        st.caption(f"SSO User: `{active_email or 'Authenticated'}`")
-        st.link_button(
-            "Open Layer-5 Enrichment & Book Studio ↗",
-            url=l5_url,
-            use_container_width=True,
-        )
+    # 1. Sidebar Bridge (renders unconditionally on every rerun)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🚀 Layer-5 Studio Bridge")
+    st.sidebar.caption(f"SSO User: `{active_email or 'Authenticated'}`")
+    st.sidebar.link_button(
+        "Open Layer-5 Enrichment & Book Studio ↗",
+        url=l5_url,
+        use_container_width=True,
+    )
 
-    # 2. Main Dashboard Launcher (directly above Select Workflow Mode)
+    # 2. Main Dashboard Bridge (directly above Select Workflow Mode)
     b_col1, b_col2 = st.columns([3.2, 1.5])
     b_col1.info(f"🚀 **Cross-Layer Handoff Ready** — Launch Layer-5 Studio signed in as `{active_email or 'Authenticated'}`")
     b_col2.link_button(
@@ -1905,7 +1900,6 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
-    st.session_state["_l4_l5_bridge_rendered_this_run"] = False
     st.sidebar.header("⚙️ Layer-3 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
