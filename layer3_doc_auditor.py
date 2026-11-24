@@ -23,6 +23,131 @@ from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow, Flow
 from googleapiclient.discovery import build
+
+# ==============================================================================
+# MULTI-DRIVE OAUTH SESSION CAPTURE & CROSS-DRIVE DOWNLOADER
+# ==============================================================================
+import io as _l4_io
+import json as _l4_json
+import re as _l4_re
+import streamlit as _l4_st
+from googleapiclient.discovery import build as _l4_orig_build
+from googleapiclient.http import MediaIoBaseDownload as _l4_MediaIoBaseDownload
+
+
+def _l4_tracked_build(serviceName, version, *args, **kwargs):
+    svc = _l4_orig_build(serviceName, version, *args, **kwargs)
+    if serviceName == "drive" and svc is not None:
+        _l4_st.session_state["_l4_oauth_drive_svc"] = svc
+    return svc
+
+
+build = _l4_tracked_build
+
+
+def _l4_resolve_active_drive_service(local_scope: dict):
+    # 1. Check session-cached OAuth Drive client
+    cached = _l4_st.session_state.get("_l4_oauth_drive_svc")
+    if cached is not None and hasattr(cached, "files"):
+        return cached
+
+    # 2. Scan local/global scope for any active Drive Resource
+    for scope_dict in (local_scope, globals()):
+        for _, val in list(scope_dict.items()):
+            if val is not None and hasattr(val, "files") and callable(getattr(val, "files", None)):
+                _l4_st.session_state["_l4_oauth_drive_svc"] = val
+                return val
+
+    # 3. Reconstruct Drive client from any OAuth Credentials stored in st.session_state
+    try:
+        from google.oauth2.credentials import Credentials as _L4Creds
+        for _, val in list(_l4_st.session_state.items()):
+            if isinstance(val, _L4Creds) and getattr(val, "valid", False):
+                svc = _l4_orig_build("drive", "v3", credentials=val, cache_discovery=False)
+                _l4_st.session_state["_l4_oauth_drive_svc"] = svc
+                return svc
+            if isinstance(val, str) and '"token"' in val and '"client_id"' in val:
+                info = _l4_json.loads(val)
+                creds = _L4Creds.from_authorized_user_info(info)
+                svc = _l4_orig_build("drive", "v3", credentials=creds, cache_discovery=False)
+                _l4_st.session_state["_l4_oauth_drive_svc"] = svc
+                return svc
+    except Exception:
+        pass
+
+    return None
+
+
+def _l4_extract_drive_file_id(url_or_id: str) -> str:
+    s = str(url_or_id or "").strip()
+    patterns = [
+        r"/document/d/([a-zA-Z0-9_-]{15,})",
+        r"/spreadsheets/d/([a-zA-Z0-9_-]{15,})",
+        r"/presentation/d/([a-zA-Z0-9_-]{15,})",
+        r"/file/d/([a-zA-Z0-9_-]{15,})",
+        r"[?&]id=([a-zA-Z0-9_-]{15,})",
+        r"^([a-zA-Z0-9_-]{15,})$",
+    ]
+    for pat in patterns:
+        m = _l4_re.search(pat, s)
+        if m:
+            return m.group(1)
+    raise ValueError("Could not extract a valid Google Drive / Docs / Sheets file ID.")
+
+
+def _l4_download_from_any_drive(url_or_id: str, local_scope: dict) -> tuple[bytes, str]:
+    svc = _l4_resolve_active_drive_service(local_scope)
+    if svc is None:
+        raise RuntimeError(
+            "Google Drive session is not initialized in this mode. Click 'Sign In with Google' at the top first."
+        )
+
+    file_id = _l4_extract_drive_file_id(url_or_id)
+    try:
+        meta = svc.files().get(
+            fileId=file_id,
+            fields="id, name, mimeType",
+            supportsAllDrives=True,
+        ).execute()
+    except Exception as meta_exc:
+        raise RuntimeError(
+            f"Cannot access file `{file_id}` on external/shared Drive. Ensure Viewer access is shared with your signed-in Google account. ({meta_exc})"
+        )
+
+    orig_name = meta.get("name", f"drive_file_{file_id}")
+    mime = meta.get("mimeType", "")
+
+    export_map = {
+        "application/vnd.google-apps.document": (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".docx",
+        ),
+        "application/vnd.google-apps.spreadsheet": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xlsx",
+        ),
+        "application/vnd.google-apps.presentation": (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".pptx",
+        ),
+    }
+
+    if mime in export_map:
+        exp_mime, ext = export_map[mime]
+        request = svc.files().export_media(fileId=file_id, mimeType=exp_mime)
+        out_name = orig_name if orig_name.lower().endswith(ext) else f"{orig_name}{ext}"
+    else:
+        request = svc.files().get_media(fileId=file_id, supportsAllDrives=True)
+        out_name = orig_name
+
+    buf = _l4_io.BytesIO()
+    downloader = _l4_MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+
+    return buf.getvalue(), out_name
+
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 from googleapiclient.errors import HttpError
 
@@ -1838,7 +1963,7 @@ def main():
                 f_id = extract_drive_id(ms_link)
                 if f_id:
                     try:
-                        b, ms_filename, _ = download_drive_file_bytes(drive_svc, f_id)
+                        b, ms_filename = _l4_download_from_any_drive(f_id, locals())
                         ms_text, ms_df = extract_text_and_df_from_buffer(b, ms_filename)
                         st.info(f"Loaded Drive file **{ms_filename}** ({len(ms_text):,} characters).")
                     except Exception as exc:
