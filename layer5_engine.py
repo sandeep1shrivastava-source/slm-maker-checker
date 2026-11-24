@@ -3179,3 +3179,98 @@ def sync_layer5_master_tracker_row(
         spreadsheetId=spreadsheet_id,
         body={"valueInputOption": "USER_ENTERED", "data": updates},
     ).execute()
+
+
+# ==============================================================================
+# CROSS-PROVIDER AUTO-FAILOVER & RESILIENT LLM WRAPPER
+# ==============================================================================
+_orig_call_layer5_llm_json = call_layer5_llm_json
+
+
+def _set_llm_warning(msg: str) -> None:
+    try:
+        st.session_state["l5_last_llm_warning"] = msg
+    except Exception:
+        pass
+
+
+def call_layer5_llm_json(
+    provider: str,
+    model_id: str,
+    system_prompt: str,
+    user_prompt: str,
+    override_api_key: str = "",
+    topology: Optional[Dict] = None,
+) -> Dict:
+    """
+    Wraps call_layer5_llm_json with:
+      1. Automatic detection of invalid 'AQ.' OAuth tokens in GEMINI_API_KEY(S)
+      2. Automatic failover across OpenAI, Anthropic, and Gemini
+      3. Graceful fallback to Deterministic Offline Scaffolding with clear UI diagnostics
+    """
+    if "Offline" in (provider or ""):
+        return _orig_call_layer5_llm_json(
+            provider, model_id, system_prompt, user_prompt, override_api_key, topology=topology
+        )
+
+    try:
+        sec_gemini = str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+        sec_gemini_list = [str(k).strip() for k in st.secrets.get("GEMINI_API_KEYS", []) if str(k).strip()]
+        sec_openai = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        sec_anthropic = str(st.secrets.get("ANTHROPIC_API_KEY", "")).strip()
+    except Exception:
+        sec_gemini, sec_gemini_list, sec_openai, sec_anthropic = "", [], "", ""
+
+    all_gem_keys = [k for k in ([sec_gemini] + sec_gemini_list) if k]
+    has_valid_gemini_key = bool(override_api_key.strip()) or any(k.startswith("AIza") for k in all_gem_keys)
+
+    attempts: List[Tuple[str, str, str]] = []
+    errors: List[str] = []
+
+    if provider == "Google Gemini" and not has_valid_gemini_key:
+        errors.append(
+            "Google Gemini skipped: configured GEMINI_API_KEY(S) are OAuth tokens ('AQ...') instead of Google AI Studio API keys ('AIzaSy...')."
+        )
+    else:
+        attempts.append((provider, model_id, override_api_key))
+
+    # Cross-provider backup chain
+    if sec_openai and provider != "OpenAI (ChatGPT)":
+        attempts.append(("OpenAI (ChatGPT)", "gpt-4o-mini", ""))
+    if sec_anthropic and provider != "Anthropic (Claude)":
+        attempts.append(("Anthropic (Claude)", "claude-sonnet-4-20250514", ""))
+        attempts.append(("Anthropic (Claude)", "claude-3-5-sonnet-latest", ""))
+    if has_valid_gemini_key and provider != "Google Gemini":
+        attempts.append(("Google Gemini", "gemini-2.5-flash", ""))
+
+    for idx, (cand_prov, cand_model, cand_override) in enumerate(attempts):
+        try:
+            res = _orig_call_layer5_llm_json(
+                cand_prov,
+                cand_model,
+                system_prompt,
+                user_prompt,
+                cand_override,
+                topology=topology,
+            )
+            if idx > 0 or errors:
+                _set_llm_warning(
+                    f"Primary AI provider unavailable ({'; '.join(errors)}). Automatically completed request using **{cand_prov}** (`{cand_model}`)."
+                )
+            return res
+        except Exception as exc:
+            errors.append(f"{cand_prov} ({cand_model}): {str(exc)[:180]}")
+
+    # Final safety net: never crash Streamlit with a redacted RuntimeError
+    _set_llm_warning(
+        "Live AI providers returned errors (" + " | ".join(errors) + "). "
+        "Generated structured output via **Deterministic Offline Scaffolding** so your review can continue."
+    )
+    return _orig_call_layer5_llm_json(
+        "Deterministic Offline Scaffolding (No AI Key)",
+        "offline-deterministic",
+        system_prompt,
+        user_prompt,
+        "",
+        topology=topology,
+    )
