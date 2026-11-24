@@ -34,6 +34,67 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 import pypdf
 import streamlit as st
+
+# ==============================================================================
+# CROSS-APP SSO BRIDGE: 1-CLICK HANDOFF FROM LAYER-4 TO LAYER-5 STUDIO
+# ==============================================================================
+import hashlib as _l4_hashlib
+import hmac as _l4_hmac
+import time as _l4_time
+from urllib.parse import urlencode as _l4_urlencode
+
+
+def _l4_resolve_sso_email() -> str:
+    for key in ("auth_email", "user_email", "logged_in_email", "oauth_user_email", "google_user_email"):
+        val = st.session_state.get(key)
+        if isinstance(val, str) and "@" in val:
+            return val.strip().lower()
+    for _, val in list(st.session_state.items()):
+        if isinstance(val, str) and "@" in val and "." in val.split("@")[-1] and len(val) < 80:
+            return val.strip().lower()
+    approved_fallback = [str(e).strip().lower() for e in st.secrets.get("APPROVED_EMAILS", []) if "@" in str(e)]
+    return approved_fallback[0] if approved_fallback else ""
+
+
+def _l4_build_layer5_sso_url(user_email: str) -> str:
+    base_url = str(st.secrets.get("LAYER5_APP_URL", "https://slm-maker-checker-ad99-layer5.streamlit.app")).rstrip("/")
+    secret = str(st.secrets.get("SSO_SECRET", "")).strip()
+    sso_user = str(user_email or "").strip().lower()
+    if not secret or not sso_user:
+        return base_url
+    exp = str(int(_l4_time.time()) + 900)
+    raw_msg = f"{sso_user}:{exp}"
+    sig = _l4_hmac.new(secret.encode("utf-8"), raw_msg.encode("utf-8"), _l4_hashlib.sha256).hexdigest()
+    return f"{base_url}/?{_l4_urlencode({'sso_user': sso_user, 'exp': exp, 'sig': sig})}"
+
+
+def _l4_render_layer5_sidebar_bridge() -> None:
+    active_email = _l4_resolve_sso_email()
+    l5_url = _l4_build_layer5_sso_url(active_email)
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 🚀 Layer-5 Studio Bridge")
+    st.sidebar.caption(f"SSO User: `{active_email or 'Authenticated'}`")
+    st.sidebar.link_button(
+        "Open Layer-5 Enrichment & Book Studio ↗",
+        url=l5_url,
+        use_container_width=True,
+    )
+    st.sidebar.markdown("---")
+
+
+def _l4_render_layer5_main_bridge() -> None:
+    active_email = _l4_resolve_sso_email()
+    l5_url = _l4_build_layer5_sso_url(active_email)
+    b_col1, b_col2 = st.columns([3.2, 1.5])
+    b_col1.info(
+        f"🚀 **Cross-Layer Handoff Ready** — Launch Layer-5 Studio signed in as `{active_email or 'Authenticated'}`"
+    )
+    b_col2.link_button(
+        "Open Layer-5 Studio ↗",
+        url=l5_url,
+        use_container_width=True,
+    )
+
 from layer4_rigor_engine import (
     run_docx_forensic_precheck,
     run_text_forensic_precheck,
@@ -1892,6 +1953,7 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
 # MAIN STREAMLIT APPLICATION
 # ==============================================================================
 def main():
+    _l4_render_layer5_sidebar_bridge()
     st.sidebar.header("⚙️ Layer-4 Configuration")
 
     # 1. Multi-Provider AI Selector (Gemini / OpenAI ChatGPT / Anthropic Claude / Deterministic)
@@ -1973,6 +2035,7 @@ def main():
     else:
         st.success(f"✅ **Google Drive & Sheets Connected:** `{sa_email}`")
 
+    _l4_render_layer5_main_bridge()
     work_mode = st.radio(
         "Select Workflow Mode:",
         options=[
