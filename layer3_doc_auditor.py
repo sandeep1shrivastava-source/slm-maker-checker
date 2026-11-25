@@ -1664,6 +1664,114 @@ def _fmt_cluster(x):
         return f'{n} ({c} items): {d}' if c else f'{n}: {d}'
     return str(x)
 
+
+try:
+    from layer5_content_enhancer import (
+        auto_clean_mcq_workbook as _l5_clean_mcq,
+        build_surgical_fixit_prompt as _l5_fixit_prompt,
+        build_surgical_fixit_docx as _l5_fixit_docx,
+    )
+except Exception:
+    _l5_clean_mcq = None
+    _l5_fixit_prompt = None
+    _l5_fixit_docx = None
+
+
+def _render_layer5_ui_panel(audit_res: dict, ms_bytes: bytes | None, ms_filename: str, ms_text: str):
+    if _l5_clean_mcq is None:
+        return
+    fn_lower = str(ms_filename or "").lower()
+    st.markdown("---")
+    st.subheader("Layer-5 Surgical Fix-It Content Enhancement")
+
+    if fn_lower.endswith((".xlsx", ".xlsm")) and ms_bytes:
+        st.caption("Sanitize corrupted headers (e.g. '3orre3t Option'), normalize 1-4 keys to A-D, realign shifted metadata rows, strip banners/duplicates, and generate an Audit_Change_Log tab.")
+        if st.button("Auto-Clean & Remediate MCQ Workbook (.xlsx)", key="l5_btn_mcq_clean"):
+            with st.spinner("Running deterministic Layer-5 MCQ surgical remediation..."):
+                clean_bytes, stats = _l5_clean_mcq(ms_bytes, audit_res=audit_res)
+                st.session_state["l5_clean_xlsx_bytes"] = clean_bytes
+                st.session_state["l5_clean_xlsx_stats"] = stats
+                st.session_state["l5_clean_xlsx_name"] = f"Cleaned_{ms_filename}"
+
+        if st.session_state.get("l5_clean_xlsx_bytes"):
+            stt = st.session_state.get("l5_clean_xlsx_stats", {})
+            st.success(
+                f"Remediation complete: {stt.get('clean_items_kept', 0)} clean MCQs kept | "
+                f"{stt.get('headers_fixed', 0)} headers sanitized | "
+                f"{stt.get('keys_normalized', 0)} keys normalized | "
+                f"{stt.get('metadata_realigned', 0)} shifted rows realigned | "
+                f"{stt.get('duplicates_removed', 0)} duplicates removed."
+            )
+            st.download_button(
+                label="Download Remediated MCQ Workbook (.xlsx)",
+                data=st.session_state["l5_clean_xlsx_bytes"],
+                file_name=st.session_state.get("l5_clean_xlsx_name", "Cleaned_MCQ_Bank.xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="l5_dl_mcq_clean",
+            )
+    else:
+        score_val = 0.0
+        try:
+            score_val = float(str(audit_res.get("overall_score", audit_res.get("final_score", 0))).replace("%", "").strip() or 0)
+        except Exception:
+            score_val = 0.0
+        if score_val < 80.0:
+            st.warning(f"Score ({score_val:.1f}%) is below the 80% gate. Generate a targeted Layer-5 Surgical Fix-It Addendum (.docx) to remediate all flagged defects.")
+        else:
+            st.info(f"Score ({score_val:.1f}%) passed the 80% gate. Optional: generate a Layer-5 Surgical Fix-It Addendum (.docx) to polish remaining minor items.")
+
+        if st.button("Generate Layer-5 Surgical Fix-It Addendum (.docx)", key="l5_btn_slm_fixit"):
+            with st.spinner("Generating targeted Surgical Fix-It blocks via active LLM provider..."):
+                title_str = str(audit_res.get("title") or ms_filename or "SLM Chapter")
+                subj_str = str(audit_res.get("subject") or "Academic Curriculum")
+                prompt_l5 = _l5_fixit_prompt(title_str, subj_str, ms_text or "", audit_res)
+                raw_json_str = None
+                for fn_name in ("call_active_llm_json", "run_llm_audit_call", "call_gemini_or_openai", "generate_audit_json"):
+                    fn_obj = globals().get(fn_name)
+                    if callable(fn_obj):
+                        try:
+                            raw_json_str = fn_obj(prompt_l5)
+                            break
+                        except Exception:
+                            pass
+                import json as _json
+                payload = None
+                if isinstance(raw_json_str, dict):
+                    payload = raw_json_str
+                elif isinstance(raw_json_str, str) and "{" in raw_json_str:
+                    try:
+                        s_i, e_i = raw_json_str.find("{"), raw_json_str.rfind("}") + 1
+                        payload = _json.loads(raw_json_str[s_i:e_i])
+                    except Exception:
+                        payload = None
+                if not isinstance(payload, dict):
+                    fixes = audit_res.get("fixes_that_would_lift_score") or audit_res.get("top_fixes") or []
+                    payload = {
+                        "executive_remediation_summary": "Deterministic fallback surgical fix-it checklist compiled from Layer-4 findings.",
+                        "projected_post_fix_score": min(96.0, round(score_val + 18.0, 1)) if score_val else 90.0,
+                        "technical_and_conceptual_patches": [
+                            {"location": "Flagged Section", "original_issue": str(f), "surgical_replacement": "Apply targeted revision per Layer-4 rubric."}
+                            for f in fixes
+                        ],
+                        "missing_pedagogical_blocks": [],
+                        "ai_burstiness_rewrites": [],
+                        "diagram_and_citation_addenda": [],
+                    }
+                fixit_bytes = _l5_fixit_docx(title_str, subj_str, payload)
+                base_stem = os.path.splitext(ms_filename or "Chapter")[0]
+                st.session_state["l5_fixit_docx_bytes"] = fixit_bytes
+                st.session_state["l5_fixit_docx_name"] = f"Layer5_FixIt_{base_stem}.docx"
+
+        if st.session_state.get("l5_fixit_docx_bytes"):
+            st.download_button(
+                label="Download Layer-5 Surgical Fix-It Addendum (.docx)",
+                data=st.session_state["l5_fixit_docx_bytes"],
+                file_name=st.session_state.get("l5_fixit_docx_name", "Layer5_Surgical_FixIt.docx"),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="l5_dl_slm_fixit",
+            )
+
+
 def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     """Compiles the complete QA Report into a styled Word (.docx) BytesIO buffer."""
     doc_obj = docx.Document()
@@ -2093,6 +2201,9 @@ def main():
             up_ms = st.file_uploader("Upload Manuscript File:", type=["xlsx", "xls", "docx", "pdf", "csv", "txt"])
             if up_ms is not None:
                 ms_filename = up_ms.name
+                _up_ms_bytes = up_ms.getvalue()
+                st.session_state['_last_ms_bytes'] = _up_ms_bytes
+                st.session_state['_last_ms_name'] = ms_filename
                 ms_text, ms_df = extract_text_and_df_from_buffer(io.BytesIO(up_ms.read()), up_ms.name)
                 st.info(f"Loaded **{up_ms.name}** ({len(ms_text):,} characters).")
         else:
@@ -2163,6 +2274,12 @@ def main():
                     data=docx_buf.getvalue(),
                     file_name=f"QA_Report_{sanitize_drive_name(q_subject)}_{resolved_fmt}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+                _render_layer5_ui_panel(
+                    audit_res,
+                    st.session_state.get('_last_ms_bytes'),
+                    st.session_state.get('_last_ms_name', locals().get('ms_filename', '')),
+                    locals().get('ms_text', ''),
                 )
                 with st.expander("Preview Structured Audit JSON", expanded=False):
                     st.json(audit_res)
