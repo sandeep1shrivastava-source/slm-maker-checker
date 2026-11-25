@@ -12,7 +12,11 @@ import streamlit as st
 SESSION_TTL_SECONDS = 12 * 3600  # 12-hour workplace session
 
 
-def parse_approved_emails() -> set[str]:
+def parse_approved_emails(layer5=False):
+    raw5=st.secrets.get("LAYER5_APPROVED_EMAILS") or ""
+    s5={str(e).strip().strip("\x27\x22").lower() for e in (raw5 if isinstance(raw5,(list,tuple,set)) else str(raw5).strip("[]").split(",")) if str(e).strip()}
+    return (_parse_l4_emails() | s5) if layer5 else _parse_l4_emails()
+def _parse_l4_emails():
     raw = (
         st.secrets.get("APPROVED_EMAILS")
         or st.secrets.get("ALLOWED_EMAILS")
@@ -119,9 +123,17 @@ def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
         return False, f"SMTP error ({type(exc).__name__}): {exc}"
 
 
+def _l5_sso():
+    sec=str(st.secrets.get("SSO_SECRET","")).strip(); u=str(st.query_params.get("sso_user","")).strip().lower(); exp=str(st.query_params.get("exp","")).strip(); sig=str(st.query_params.get("sig","")).strip()
+    if not(sec and u and exp and sig) or int(exp)<int(time.time()): return None
+    exp_sig=hmac.new(sec.encode(),f"{u}:{exp}".encode(),hashlib.sha256).hexdigest()
+    return u if hmac.compare_digest(sig,exp_sig) else None
 def require_team_auth() -> bool:
-    approved = parse_approved_emails()
-    passcode = str(st.secrets.get("TEAM_PASSCODE", "")).strip()
+    is_l5=str(st.session_state.get("_app_layer_mode","l4")).lower()=="l5"
+    if is_l5 and not st.session_state.get("layer3_auth_ok",False) and _l5_sso():
+        u=_l5_sso(); tok=create_signed_auth_token(u); st.session_state.update({"layer3_auth_ok":True,"layer3_auth_user":u,"layer3_auth_token":tok}); st.query_params.clear(); st.query_params["_auth"]=tok
+    approved = parse_approved_emails(layer5=is_l5)
+    passcode = str(st.secrets.get("LAYER5_PASSCODE" if is_l5 else "TEAM_PASSCODE") or st.secrets.get("TEAM_PASSCODE", "")).strip()
 
     if not approved and not passcode:
         st.error("Access locked: Configure APPROVED_EMAILS or TEAM_PASSCODE in Streamlit Secrets.")
@@ -160,11 +172,11 @@ def require_team_auth() -> bool:
 
     _, col_mid, _ = st.columns([1, 1.5, 1])
     with col_mid:
-        st.markdown("## 🔐 Step 1: Layer-4 Workplace Sign-In")
+        st.markdown(("## 🔐 Step 1: Layer-5 Content Enhancement Studio Sign-In" if is_l5 else "## 🔐 Step 1: Layer-4 Workplace Sign-In"))
         st.caption("Verify your approved email ID via 6-digit OTP once to enter the QA workspace.")
 
         tab_labels = (["📧 Email ID + OTP Login"] if approved else []) + (
-            ["🔑 Team Passcode"] if passcode else []
+            [("🔑 Layer-5 Passcode" if is_l5 else "🔑 Team Passcode")] if passcode else []
         )
         tabs = st.tabs(tab_labels)
         idx = 0
