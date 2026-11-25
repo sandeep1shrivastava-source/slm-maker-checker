@@ -30,16 +30,16 @@ def parse_and_audit_mcq_workbook(source) -> dict:
         cmap, h_row = {}, None
         for r in range(1, min(11, ws.max_row + 1)):
             rvals = [str(ws.cell(r, c).value).strip().lower() if ws.cell(r, c).value is not None else "" for c in range(1, ws.max_column + 1)]
-            if "question" in rvals and ("option a" in rvals or "opt a" in rvals):
+            if "question" in rvals and any(x in rvals for x in ("option a", "opt a", "option 1", "opt 1")):
                 h_row = r
                 for i, h in enumerate(rvals):
                     if h in ("sr no", "sr. no", "sr. no.", "q no", "q.no", "id"): cmap["sr"] = i
                     elif "section" in h or "topic" in h or "module" in h: cmap.setdefault("sec", i)
                     elif h == "question" or "question stem" in h: cmap["q"] = i
-                    elif h in ("option a", "opt a", "a"): cmap["a"] = i
-                    elif h in ("option b", "opt b", "b"): cmap["b"] = i
-                    elif h in ("option c", "opt c", "c"): cmap["c"] = i
-                    elif h in ("option d", "opt d", "d"): cmap["d"] = i
+                    elif h in ("option a", "opt a", "a", "option 1", "opt 1", "1"): cmap["a"] = i
+                    elif h in ("option b", "opt b", "b", "option 2", "opt 2", "2"): cmap["b"] = i
+                    elif h in ("option c", "opt c", "c", "option 3", "opt 3", "3"): cmap["c"] = i
+                    elif h in ("option d", "opt d", "d", "option 4", "opt 4", "4"): cmap["d"] = i
                     elif h in ("correct option", "option key", "answer key", "correct letter", "key") or ("option" in h and any(k in h for k in ("correct", "orre3t", "key", "id", "letter"))): cmap["let"] = i
                     elif h in ("correct answer", "answer text", "answer"): cmap["ans"] = i
                     elif "btl" in h or "bloom" in h: cmap["btl"] = i

@@ -1652,7 +1652,7 @@ def _safe_item_row(x, keys):
             parts = [p.strip() for p in s.split(sep, len(keys) - 1)]
             return parts + [''] * (len(keys) - len(parts))
     out = [''] * len(keys)
-    out[min(1, len(keys) - 1)] = s
+    out[0 if s.startswith(('Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8', 'Q9', 'Row')) else min(1, len(keys) - 1)] = s
     return out
 
 
@@ -1660,7 +1660,7 @@ def _fmt_cluster(x):
     if isinstance(x, dict):
         n = x.get('cluster_name') or x.get('name', 'Cluster')
         c = x.get('item_count', '')
-        d = x.get('description', '')
+        d = x.get('description') or x.get('recommendation', ''); its = x.get('items', ''); d = f'{d} [Items: {its}]' if its else d
         return f'{n} ({c} items): {d}' if c else f'{n}: {d}'
     return str(x)
 
