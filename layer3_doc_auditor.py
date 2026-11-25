@@ -1647,13 +1647,22 @@ def _safe_item_row(x, keys):
     if not s:
         return [''] * len(keys)
     # Split 'Ref: Issue -> Fix' or 'Ref | Issue | Fix' if formatted as delimited string
-    for sep in (' | ', ' -> ', ' — ', ' - '):
+    for sep in (' | ', ' -> ', ' — ', ' - ', ': '):
         if sep in s:
             parts = [p.strip() for p in s.split(sep, len(keys) - 1)]
             return parts + [''] * (len(keys) - len(parts))
     out = [''] * len(keys)
     out[min(1, len(keys) - 1)] = s
     return out
+
+
+def _fmt_cluster(x):
+    if isinstance(x, dict):
+        n = x.get('cluster_name') or x.get('name', 'Cluster')
+        c = x.get('item_count', '')
+        d = x.get('description', '')
+        return f'{n} ({c} items): {d}' if c else f'{n}: {d}'
+    return str(x)
 
 def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     """Compiles the complete QA Report into a styled Word (.docx) BytesIO buffer."""

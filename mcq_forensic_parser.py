@@ -40,7 +40,7 @@ def parse_and_audit_mcq_workbook(source) -> dict:
                     elif h in ("option b", "opt b", "b"): cmap["b"] = i
                     elif h in ("option c", "opt c", "c"): cmap["c"] = i
                     elif h in ("option d", "opt d", "d"): cmap["d"] = i
-                    elif h in ("correct option", "option key", "answer key", "correct letter", "key"): cmap["let"] = i
+                    elif h in ("correct option", "option key", "answer key", "correct letter", "key") or ("option" in h and any(k in h for k in ("correct", "orre3t", "key", "id", "letter"))): cmap["let"] = i
                     elif h in ("correct answer", "answer text", "answer"): cmap["ans"] = i
                     elif "btl" in h or "bloom" in h: cmap["btl"] = i
                     elif "difficulty" in h: cmap["diff"] = i
@@ -83,10 +83,12 @@ def parse_and_audit_mcq_workbook(source) -> dict:
             ans = str(raw[cmap["ans"]]).strip() if "ans" in cmap and cmap["ans"] < len(raw) and raw[cmap["ans"]] is not None else ""
 
             if let:
-                if let not in ("A", "B", "C", "D"):
-                    mismatches.append(f"[{sname.strip()} | Row {r} | Sr {srv}] Invalid option letter '{let}'.")
-                elif ans and opts.get(let, "") != ans:
-                    mismatches.append(f"[{sname.strip()} | Row {r} | Sr {srv}] Option '{let}' ('{opts.get(let)}') != Answer text ('{ans}').")
+                let_map = {"1": "A", "2": "B", "3": "C", "4": "D"}
+                norm_let = let_map.get(let, let)
+                if norm_let not in ("A", "B", "C", "D"):
+                    mismatches.append(f"[{sname.strip()} | Row {r} | Sr {srv}] Invalid option identifier '{let}'.")
+                elif ans and opts.get(norm_let, "") != ans:
+                    mismatches.append(f"[{sname.strip()} | Row {r} | Sr {srv}] Option '{let}' ('{opts.get(norm_let)}') != Answer text ('{ans}').")
             elif ans and ans.upper() not in ("A", "B", "C", "D"):
                 mismatches.append(f"[{sname.strip()} | Row {r} | Sr {srv}] Answer '{ans}' lacks A/B/C/D letter.")
 
