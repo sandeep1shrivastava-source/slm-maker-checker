@@ -287,13 +287,6 @@ def build_strict_audit_prompt(*args, **kwargs):
             break
     return _orig_build_strict_audit_prompt(*al, **kwargs)
 
-st.set_page_config(
-    page_title="Layer-4 Academic Document Auditor & Live Sheets Pipeline",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
 import streamlit as st
 from layer3_auth import require_team_auth, get_current_auth_token  # match your function name in layer3_auth.py
 
@@ -413,7 +406,12 @@ def render_threshold_sidebar():
 
 
 
-st.set_page_config(page_title="Layer-4 Academic Document Auditor", layout="wide")
+st.set_page_config(
+    page_title="Layer-4 Academic Document Auditor & Live Sheets Pipeline",
+    page_icon="📄",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 if not require_team_auth():
     st.stop()
@@ -895,8 +893,6 @@ def sync_live_sheet_row(
 # ==============================================================================
 def detect_deliverable_format(explicit_fmt: str, filename: str, text_sample: str) -> str:
     """Identifies MCQ, SLM, QB, or PPT from explicit tracker metadata, filename, or text."""
-    _mx = _try_extract_mcq_xlsx(explicit_fmt, filename)
-    if _mx: return _mx
     combined_meta = f"{explicit_fmt} {filename}".upper()
     if any(k in combined_meta for k in ["MCQ", "MULTIPLE CHOICE", "OBJECTIVE", "QUIZ"]):
         return "MCQ"
@@ -2522,8 +2518,9 @@ def main():
                 out_ws.cell(row=sheet_row, column=status_col_0idx + 1, value=status_label)
 
                 try:
-                    raw_df.at[sheet_row - 2, raw_headers[link_col_0idx] if existing_link_col else "QA Report Link"] = report_drive_link
-                    raw_df.at[sheet_row - 2, raw_headers[status_col_0idx] if "audit status" in lower_headers else "Audit Status"] = status_label
+                    df_row_idx = sheet_row - (header_row_1idx + 1)
+                    raw_df.at[df_row_idx, raw_headers[link_col_0idx] if existing_link_col else "QA Report Link"] = report_drive_link
+                    raw_df.at[df_row_idx, raw_headers[status_col_0idx] if "audit status" in lower_headers else "Audit Status"] = status_label
                 except Exception:
                     pass
 
