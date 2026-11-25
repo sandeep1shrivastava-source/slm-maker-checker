@@ -18,3 +18,5 @@ pending_otps.json
 
 .streamlit/oauth_client.json
 .streamlit/oauth_token.json
+*.bundle
+.auth_cache.json
