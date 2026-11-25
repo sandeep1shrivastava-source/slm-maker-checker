@@ -1636,6 +1636,25 @@ def add_styled_table(doc_obj, headers: list, rows: list, col_widths: list | None
     return table
 
 
+
+def _safe_item_row(x, keys):
+    if isinstance(x, dict):
+        return [str(x.get(k, '') or '') for k in keys]
+    if isinstance(x, (list, tuple)):
+        vals = [str(v or '') for v in x[:len(keys)]]
+        return vals + [''] * (len(keys) - len(vals))
+    s = str(x or '').strip()
+    if not s:
+        return [''] * len(keys)
+    # Split 'Ref: Issue -> Fix' or 'Ref | Issue | Fix' if formatted as delimited string
+    for sep in (' | ', ' -> ', ' — ', ' - '):
+        if sep in s:
+            parts = [p.strip() for p in s.split(sep, len(keys) - 1)]
+            return parts + [''] * (len(keys) - len(parts))
+    out = [''] * len(keys)
+    out[min(1, len(keys) - 1)] = s
+    return out
+
 def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     """Compiles the complete QA Report into a styled Word (.docx) BytesIO buffer."""
     doc_obj = docx.Document()
@@ -1768,7 +1787,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     sk_issues = audit_data.get("subject_knowledge_issues", [])
     if sk_issues:
         sk_rows = [
-            [x.get("item_ref", ""), x.get("issue", ""), x.get("suggestion", "")]
+            _safe_item_row(x, ['item_ref', 'issue', 'suggestion'])
             for x in sk_issues
         ]
         add_styled_table(doc_obj, ["Q#", "Issue", "Suggestion"], sk_rows, [0.8, 3.4, 2.8])
@@ -1781,7 +1800,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     tech_items = audit_data.get("technical_error_items", [])
     if tech_items:
         t_rows = [
-            [x.get("item_ref", ""), x.get("issue", ""), x.get("fix", "")]
+            _safe_item_row(x, ['item_ref', 'issue', 'fix'])
             for x in tech_items
         ]
         add_styled_table(doc_obj, ["Q#", "Issue", "Fix"], t_rows, [1.0, 3.3, 2.7])
@@ -1791,7 +1810,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     rep_groups = audit_data.get("repetition_groups", [])
     if rep_groups:
         rep_rows = [
-            [x.get("concept", ""), x.get("items", ""), x.get("delete_items", "")]
+            _safe_item_row(x, ['concept', 'items', 'delete_items'])
             for x in rep_groups
         ]
         add_styled_table(doc_obj, ["Concept", "Questions", "Delete"], rep_rows, [3.2, 2.1, 1.7])
@@ -1809,7 +1828,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     doc_obj.add_heading("3b. Clarity", level=2)
     clarity_issues = audit_data.get("clarity_issues", [])
     if clarity_issues:
-        cl_rows = [[x.get("item_ref", ""), x.get("issue", "")] for x in clarity_issues]
+        cl_rows = [_safe_item_row(x, ['item_ref', 'issue']) for x in clarity_issues]
         add_styled_table(doc_obj, ["Q#", "Issue"], cl_rows, [1.6, 5.4])
     else:
         doc_obj.add_paragraph("Clear stems and well-balanced distractors throughout.")
@@ -1819,7 +1838,7 @@ def build_layer3_docx_report(audit_data: dict) -> io.BytesIO:
     gram_issues = audit_data.get("grammar_issues", [])
     if gram_issues:
         gr_rows = [
-            [x.get("item_ref", ""), x.get("issue", ""), x.get("fix", "")]
+            _safe_item_row(x, ['item_ref', 'issue', 'fix'])
             for x in gram_issues
         ]
         add_styled_table(doc_obj, ["Q#", "Issue", "Fix"], gr_rows, [0.9, 3.3, 2.8])
