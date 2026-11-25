@@ -254,3 +254,84 @@ def build_surgical_fixit_docx(title: str, subject: str, fixit_payload: dict) -> 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+import pptx
+
+def parse_layer4_docx_report(report_source) -> dict:
+    raw = bytes(report_source) if isinstance(report_source, (bytes, bytearray)) else report_source.read()
+    doc = Document(io.BytesIO(raw))
+    paras = [(p.text or "").strip() for p in doc.paragraphs if (p.text or "").strip()]
+    overall_score, verdict = "", ""
+    for p in paras[:35]:
+        m = re.search(r"(?:score|rating|total)[\s:]*(\d+(?:\.\d+)?%?)", p, re.I)
+        if m and not overall_score:
+            overall_score = m.group(1)
+        if any(k in p.lower() for k in ("verdict", "status", "reject", "rework", "accept", "pass")) and len(p) < 140:
+            verdict = p
+    score_breakdown, findings = [], []
+    for t_idx, tbl in enumerate(doc.tables, start=1):
+        rows = [[(c.text or "").strip() for c in row_obj.cells] for row_obj in tbl.rows]
+        if len(rows) < 2:
+            continue
+        hdr_joined = " ".join(rows[0]).lower()
+        if any(k in hdr_joined for k in ("parameter", "criterion", "score", "weight")):
+            for r in rows[1:]:
+                if any(r):
+                    score_breakdown.append(" | ".join([c for c in r if c]))
+        else:
+            for r_i, r in enumerate(rows[1:], start=1):
+                if any(r):
+                    item = " | ".join([c for c in r if c])
+                    findings.append(f"[L4-T{t_idx}-R{r_i}] {item}")
+    for p in paras:
+        if p.startswith(("-", "*", "\u2022")) or re.match(r"^\d+[\.\)]", p):
+            if len(p) > 15:
+                findings.append(p)
+    deduped = list(dict.fromkeys(findings))
+    return {
+        "overall_score": overall_score or "Report v1 Loaded",
+        "verdict": verdict or "Layer-4 Baseline Report",
+        "score_breakdown": score_breakdown[:20],
+        "technical_errors": deduped[:25],
+        "clarity_issues": deduped[25:45],
+        "fixes_that_would_lift_score": deduped[:30],
+        "total_findings": len(deduped),
+    }
+
+def extract_manuscript_text(raw_bytes: bytes, filename: str) -> str:
+    fn = filename.lower()
+    if fn.endswith(".docx"):
+        d = Document(io.BytesIO(raw_bytes))
+        blocks = [p.text.strip() for p in d.paragraphs if p.text.strip()]
+        for t in d.tables:
+            for r in t.rows:
+                rt = " | ".join(c.text.strip() for c in r.cells if c.text.strip())
+                if rt:
+                    blocks.append(rt)
+        return "\n".join(blocks)
+    elif fn.endswith(".pdf"):
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
+        return "\n".join((pg.extract_text() or "") for pg in reader.pages)
+    elif fn.endswith(".pptx"):
+        prs = pptx.Presentation(io.BytesIO(raw_bytes))
+        slides_out = []
+        for idx, slide in enumerate(prs.slides, start=1):
+            parts = [f"[--- SLIDE {idx} ---]"]
+            for shp in slide.shapes:
+                if shp.has_text_frame:
+                    t_shp = "\n".join(p.text.strip() for p in shp.text_frame.paragraphs if p.text.strip())
+                    if t_shp:
+                        parts.append(t_shp)
+                if shp.has_table:
+                    for r in shp.table.rows:
+                        rt = " | ".join(c.text.strip() for c in r.cells if c.text.strip())
+                        if rt:
+                            parts.append(rt)
+            if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                nt = (slide.notes_slide.notes_text_frame.text or "").strip()
+                if nt:
+                    parts.append(f"[Speaker Notes]: {nt}")
+            slides_out.append("\n".join(parts))
+        return "\n\n".join(slides_out)
+    return raw_bytes.decode("utf-8", errors="ignore")
