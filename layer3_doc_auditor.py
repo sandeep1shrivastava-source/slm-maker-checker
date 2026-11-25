@@ -2040,7 +2040,7 @@ def render_global_syllabus_widget(drive_svc, key_prefix: str = "batch") -> tuple
     if syl_mode.startswith("Option 1"):
         uploaded_syl = st.file_uploader(
             "Upload Syllabus Document (PDF, Word .docx, or .txt):",
-            type=["pdf", "docx", "txt"],
+            type=["pdf", "docx", "txt", "xlsx", "xlsm"],
             key=f"{key_prefix}_syl_uploader",
         )
         if uploaded_syl is not None:
