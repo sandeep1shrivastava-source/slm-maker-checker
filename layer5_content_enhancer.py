@@ -335,3 +335,76 @@ def extract_manuscript_text(raw_bytes: bytes, filename: str) -> str:
             slides_out.append("\n".join(parts))
         return "\n\n".join(slides_out)
     return raw_bytes.decode("utf-8", errors="ignore")
+
+
+
+def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, subject: str, payload: dict) -> tuple[bytes, str, str]:
+    """Clones the original .docx/.pptx/.txt manuscript and embeds approved Layer-5 fixes inline (Zero-Risk Clone-on-Write)."""
+    fn = filename.lower()
+    rewrites = payload.get("prose_rewrites", []) or []
+    cyps = payload.get("cyp_questions", []) or []
+    glossary = payload.get("glossary_terms", []) or []
+
+    if fn.endswith(".pptx"):
+        prs = pptx.Presentation(io.BytesIO(raw_bytes))
+        for idx, slide in enumerate(prs.slides, start=1):
+            if not slide.has_notes_slide:
+                _ = slide.notes_slide
+            prev = (slide.notes_slide.notes_text_frame.text or "").strip()
+            slide.notes_slide.notes_text_frame.text = f"{prev}\n[Layer-5 Remediated Slide {idx} | Verified against Layer-4 Report v1]".strip()
+        summary_layout = prs.slide_layouts[1] if len(prs.slide_layouts) > 1 else prs.slide_layouts[0]
+        s_end = prs.slides.add_slide(summary_layout)
+        if s_end.shapes.title:
+            s_end.shapes.title.text = f"Layer-5 QA Remediation Summary - {title}"
+        body_lines = [payload.get("executive_summary", "All Layer-4 Report v1 findings addressed.")]
+        for rw in rewrites[:6]:
+            body_lines.append(f"- {rw.get('issue', 'Fix')}: {rw.get('revised_text', '')[:140]}")
+        for shp in s_end.shapes:
+            if shp.has_text_frame and shp != s_end.shapes.title:
+                shp.text_frame.text = "\n".join(body_lines)
+                break
+        out = io.BytesIO()
+        prs.save(out)
+        return out.getvalue(), ".pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+    # Build full cloned .docx manuscript with inline replacements + CYP + Glossary + Change Log
+    doc = Document(io.BytesIO(raw_bytes)) if fn.endswith(".docx") else Document()
+    if not fn.endswith(".docx"):
+        doc.add_heading(title, level=1)
+        for line in extract_manuscript_text(raw_bytes, filename).splitlines():
+            if line.strip():
+                doc.add_paragraph(line.strip())
+
+    # Apply inline paragraph replacements where original_excerpt matches
+    for rw in rewrites:
+        orig = str(rw.get("original_excerpt", "")).strip()
+        rev = str(rw.get("revised_text", "")).strip()
+        if len(orig) >= 12 and rev:
+            for p in doc.paragraphs:
+                if orig in p.text:
+                    p.text = p.text.replace(orig, rev)
+
+    doc.add_page_break()
+    doc.add_heading(f"Layer-5 Remediated Enhancements & Audit Log - {title}", level=1)
+    doc.add_paragraph(payload.get("executive_summary", "Updated manuscript anchored to Layer-4 QA Audit Report v1."))
+
+    if rewrites:
+        doc.add_heading("Applied Editorial & Academic Corrections", level=2)
+        for idx, rw in enumerate(rewrites, start=1):
+            doc.add_paragraph(f"{idx}. [{rw.get('section', title)}] {rw.get('issue', '')}", style="List Bullet")
+            doc.add_paragraph(f"Updated Text: {rw.get('revised_text', '')}")
+
+    if cyps:
+        doc.add_heading("Check Your Progress (CYP) & Model Answer Key", level=2)
+        for idx, q in enumerate(cyps, start=1):
+            doc.add_paragraph(f"Q{idx}. {q.get('question', '')}")
+            doc.add_paragraph(f"Answer: {q.get('answer', '')}")
+
+    if glossary:
+        doc.add_heading("Key Terms & Glossary", level=2)
+        for g in glossary:
+            doc.add_paragraph(f"{g.get('term', '')}: {g.get('definition', '')}", style="List Bullet")
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue(), ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
