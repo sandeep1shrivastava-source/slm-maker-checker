@@ -1017,15 +1017,17 @@ def analyze_mcq_deterministic(df: pd.DataFrame | None, text: str) -> dict:
             cl = str(c).strip().lower()
             if any(k in cl for k in ["question", "stem", "q_text", "problem"]) and "q" not in col_map:
                 col_map["q"] = c
-            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?a", cl) or cl.startswith("option a") or cl.startswith("opt a"):
+            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?(?:a|1)(?:\s*\(a\))?", cl) or cl.startswith(("option a", "opt a", "option 1", "opt 1")):
                 col_map["A"] = c
-            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?b", cl) or cl.startswith("option b") or cl.startswith("opt b"):
+            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?(?:b|2)(?:\s*\(b\))?", cl) or cl.startswith(("option b", "opt b", "option 2", "opt 2")):
                 col_map["B"] = c
-            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?c", cl) or cl.startswith("option c") or cl.startswith("opt c"):
+            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?(?:c|3)(?:\s*\(c\))?", cl) or cl.startswith(("option c", "opt c", "option 3", "opt 3")):
                 col_map["C"] = c
-            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?d", cl) or cl.startswith("option d") or cl.startswith("opt d"):
+            elif re.fullmatch(r"(?:opt(?:ion)?\s*)?(?:d|4)(?:\s*\(d\))?", cl) or cl.startswith(("option d", "opt d", "option 4", "opt 4")):
                 col_map["D"] = c
-            elif any(k in cl for k in ["ans", "correct", "key", "solution"]):
+            elif any(k in cl for k in ["correct option", "answer key", "ans key", "key"]):
+                col_map["ans"] = c
+            elif any(k in cl for k in ["ans", "correct", "solution"]) and "ans" not in col_map:
                 col_map["ans"] = c
             elif "unit" in cl or "module" in cl or "topic" in cl:
                 result["has_unit_column"] = True
