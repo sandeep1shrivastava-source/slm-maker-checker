@@ -710,14 +710,66 @@ def download_drive_file_bytes(drive_svc, file_id: str):
     return buf, name, effective_mime
 
 
+def _classify_excel_sheet_df(df: pd.DataFrame, sheet_name: str) -> str:
+    cols_low = [str(c).strip().lower() for c in df.columns]
+    has_opts = sum(1 for c in cols_low if any(k in c for k in ("option 1", "option 2", "option a", "option b", "opt_a", "opt1"))) >= 2
+    has_key = any(any(k in c for k in ("correct", "answer key", "ans")) for c in cols_low)
+    if has_opts or (has_key and "option" in " ".join(cols_low)):
+        return "MCQ"
+    if any(k in sheet_name.lower() for k in ("mcq", "objective", "quiz")):
+        return "MCQ"
+    return "QB"
+
+
 def extract_text_and_df_from_buffer(buf: io.BytesIO, filename: str):
     """
     Extracts structured text (and DataFrame if Excel/CSV) from .docx, .pdf, .xlsx, .csv, or .txt.
-    Returns (extracted_text: str, df_or_none: pd.DataFrame | None).
+    Automatically detects and extracts ALL non-empty sheets in multi-sheet Excel workbooks (MCQ + Subjective QB).
     """
-    _mx = _try_extract_mcq_xlsx(buf, filename)
-    if _mx: return (_mx, None)
     fname = filename.lower()
+    buf.seek(0)
+    if fname.endswith((".xlsx", ".xls", ".xlsm")):
+        xl = pd.ExcelFile(buf)
+        non_empty_sheets = []
+        for s_name in xl.sheet_names:
+            df_s = xl.parse(s_name).dropna(how="all")
+            if not df_s.empty:
+                non_empty_sheets.append((s_name, df_s, _classify_excel_sheet_df(df_s, s_name)))
+
+        if len(non_empty_sheets) > 1:
+            all_lines = [f"[MULTI-SHEET WORKBOOK DETECTED: {len(non_empty_sheets)} Sheets - {', '.join(f'{n} ({t}: {len(d)} rows)' for n, d, t in non_empty_sheets)}]"]
+            mcq_dfs = []
+            for s_name, df_s, s_type in non_empty_sheets:
+                if s_type == "MCQ":
+                    mcq_dfs.append(df_s)
+                all_lines.append(f"\n=== [Worksheet: {s_name} | Detected Type: {s_type} | Total Data Rows: {len(df_s)}] ===")
+                for r_idx, row in df_s.iterrows():
+                    sheet_row_num = r_idx + 2
+                    row_items = [
+                        f"{col}: {str(val).strip()}"
+                        for col, val in row.items()
+                        if pd.notna(val) and str(val).strip() != ""
+                    ]
+                    if row_items:
+                        all_lines.append(f"[{s_name} | {s_type}] Row {sheet_row_num} (Q{r_idx + 1}): " + " | ".join(row_items))
+            buf.seek(0)
+            _mx = _try_extract_mcq_xlsx(buf, filename)
+            if _mx:
+                all_lines.append("\n=== [Deterministic MCQ Sheet Extraction Summary] ===\n" + _mx)
+            combined_mcq_df = pd.concat(mcq_dfs, ignore_index=True) if mcq_dfs else non_empty_sheets[0][1]
+            return "\n".join(all_lines), combined_mcq_df
+
+    buf.seek(0)
+    _mx = _try_extract_mcq_xlsx(buf, filename)
+    if _mx:
+        buf.seek(0)
+        try:
+            _xl1 = pd.ExcelFile(buf)
+            _best1 = max(_xl1.sheet_names, key=lambda s: len(_xl1.parse(s)))
+            _df1 = _xl1.parse(_best1).dropna(how="all")
+        except Exception:
+            _df1 = None
+        return (_mx, _df1)
     buf.seek(0)
 
     if fname.endswith(".docx"):
@@ -903,6 +955,8 @@ def detect_deliverable_format(explicit_fmt: str, filename: str, text_sample: str
     if any(k in combined_meta for k in ["SLM", "SELF LEARNING", "MODULE", "UNIT", "THEORY", "CHAPTER"]):
         return "SLM"
 
+    if "[MULTI-SHEET WORKBOOK DETECTED:" in text_sample and "Detected Type: MCQ" in text_sample and "Detected Type: QB" in text_sample:
+        return "MCQ + QB (Multi-Sheet)"
     if filename.lower().endswith((".xlsx", ".xls", ".csv")):
         return "MCQ"
 
@@ -2228,7 +2282,7 @@ def main():
                 )
                 mcq_stats = (
                     analyze_mcq_deterministic(ms_df, ms_text)
-                    if resolved_fmt == "MCQ"
+                    if resolved_fmt in ("MCQ", "MCQ + QB (Multi-Sheet)") or (ms_df is not None and "Detected Type: MCQ" in ms_text)
                     else {"total_questions": 0, "summary_line": "Narrative/structural review completed."}
                 )
                 ai_cv = compute_ai_burstiness_cv(ms_text)
@@ -2622,7 +2676,7 @@ def main():
 
                 mcq_stats = (
                     analyze_mcq_deterministic(ms_df, ms_text)
-                    if fmt_choice == "MCQ"
+                    if fmt_choice in ("MCQ", "MCQ + QB (Multi-Sheet)") or (ms_df is not None and "Detected Type: MCQ" in ms_text)
                     else {"total_questions": 0, "summary_line": "Narrative/structural check completed."}
                 )
                 ai_cv = compute_ai_burstiness_cv(ms_text)
