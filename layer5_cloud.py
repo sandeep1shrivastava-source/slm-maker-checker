@@ -353,3 +353,85 @@ def build_subject_cumulative_dossier(
     doc_buf = io.BytesIO()
     cert.save(doc_buf)
     return xl_buf.getvalue(), doc_buf.getvalue(), avg_score
+
+
+
+def col_idx_to_a1(idx_0: int) -> str:
+    n = idx_0 + 1
+    chars = []
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        chars.append(chr(65 + rem))
+    return "".join(reversed(chars))
+
+
+def sanitize_drive_name(name: str, fallback: str = "General") -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "_", str(name or "").strip()).strip(" ._")
+    return cleaned[:90] or fallback
+
+
+def get_or_create_drive_subfolder(drive_svc, parent_id: str, folder_name: str) -> str:
+    safe_name = sanitize_drive_name(folder_name, "General")
+    q = f"name = '{safe_name.replace(chr(39), chr(92) + chr(39))}' and '{parent_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    res = drive_svc.files().list(q=q, fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
+    files = res.get("files", [])
+    if files:
+        return files[0]["id"]
+    meta = {"name": safe_name, "mimeType": "application/vnd.google-apps.folder", "parents": [parent_id]}
+    created = drive_svc.files().create(body=meta, fields="id", supportsAllDrives=True).execute()
+    return created["id"]
+
+
+def upload_to_drive_hierarchy(drive_svc, root_folder_id: str, hierarchy_parts: list[str], filename: str, file_bytes: bytes, mime_type: str) -> str:
+    curr_parent = root_folder_id
+    for part in hierarchy_parts:
+        if str(part or "").strip():
+            curr_parent = get_or_create_drive_subfolder(drive_svc, curr_parent, str(part))
+    return upload_file_to_drive(drive_svc, curr_parent, sanitize_drive_name(filename, "Layer5_Output.docx"), file_bytes, mime_type)
+
+
+def load_master_tracker_tabs(sheets_svc, spreadsheet_id: str) -> list[str]:
+    meta = sheets_svc.spreadsheets().get(spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
+    return [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+
+def read_master_tracker_tab(sheets_svc, spreadsheet_id: str, tab_name: str) -> tuple[int, list[str], list[list[str]]]:
+    safe_tab = tab_name.replace("'", "''")
+    res = sheets_svc.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=f"'{safe_tab}'").execute()
+    values = res.get("values", [])
+    if not values:
+        return 1, [], []
+    hdr_idx = 0
+    for i, row in enumerate(values[:10]):
+        joined = " ".join(str(c).lower() for c in row)
+        if any(k in joined for k in ("manuscript", "link", "url", "qa report", "subject", "unit", "topic")):
+            hdr_idx = i
+            break
+    raw_headers = [str(h).strip() or f"Col_{c+1}" for c, h in enumerate(values[hdr_idx])]
+    data_rows = values[hdr_idx + 1 :]
+    return hdr_idx + 1, raw_headers, data_rows
+
+
+def sync_layer5_sheet_row(
+    sheets_svc,
+    spreadsheet_id: str,
+    tab_name: str,
+    header_row_1idx: int,
+    data_row_1idx: int,
+    l5_link_col_0idx: int,
+    l5_status_col_0idx: int,
+    remediated_link: str,
+    status_text: str,
+    write_headers: bool = False,
+):
+    safe_tab = tab_name.replace("'", "''")
+    updates = []
+    if write_headers:
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{header_row_1idx}", "values": [["Layer-5 Remediated Link"]]})
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_status_col_0idx)}{header_row_1idx}", "values": [["Layer-5 Status"]]})
+    updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{data_row_1idx}", "values": [[remediated_link]]})
+    updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_status_col_0idx)}{data_row_1idx}", "values": [[status_text]]})
+    sheets_svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"valueInputOption": "USER_ENTERED", "data": updates},
+    ).execute()
