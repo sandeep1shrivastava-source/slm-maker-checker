@@ -1518,7 +1518,7 @@ def run_multi_provider_layer3_audit(
 Return ONLY valid JSON with these exact keys:
 {{
   "report_title": "QA Report: {subject} {fmt} ({mcq_stats.get('total_questions') or 'Document'} items)",
-  "overall_score": 52,
+  "overall_score": 86,
   "executive_verdict": "Concise 2-3 sentence forensic summary.",
   "row_numbering_note": "Item numbers follow document or sheet order.",
   "ugc_plagiarism_level": "NOT RUN (Requires Institutional Similarity Tool)",
@@ -1577,6 +1577,20 @@ Return ONLY valid JSON with these exact keys:
                     return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()))
 
                 parsed = enforce_post_audit_gates(parsed, precheck)
+                try:
+                    _sb = parsed.get("score_breakdown") or []
+                    _tot_ded = 0.0
+                    for _row in _sb:
+                        _m = re.search(r"-?\d+(?:\.\d+)?", str(_row.get("deducted", "0")))
+                        if _m:
+                            _tot_ded += abs(float(_m.group(0)))
+                    if _sb and 0 < _tot_ded <= 100:
+                        _calc_score = round(max(0.0, 100.0 - _tot_ded), 1)
+                        if _calc_score == int(_calc_score):
+                            _calc_score = int(_calc_score)
+                        parsed["overall_score"] = _calc_score
+                except Exception:
+                    pass
                 parsed["ugc_plagiarism_level"] = "NOT RUN (Requires Institutional Similarity Tool)"
                 if precheck.get("force_major_changes"):
                     parsed["overall_score"] = min(float(parsed.get("overall_score", 0)), float(_cfg["minor_min"]) - 5.0)
