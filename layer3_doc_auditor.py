@@ -2505,7 +2505,20 @@ def main():
     st.subheader("🎯 Segmented Volume Filter & Execution Queue")
 
     work_df = raw_df.copy()
-    work_df["_ms_link"] = work_df[col_ms].fillna("").astype(str).str.strip()
+    _l_hdrs_l4 = [h.lower() for h in raw_headers]
+    _latest_ms_col_l4 = (
+        raw_headers[_l_hdrs_l4.index("latest manuscript link")] if "latest manuscript link" in _l_hdrs_l4 else (
+            raw_headers[_l_hdrs_l4.index("layer-5 remediated link")] if "layer-5 remediated link" in _l_hdrs_l4 else None
+        )
+    )
+    if _latest_ms_col_l4:
+        _orig_s = work_df[col_ms].fillna("").astype(str).str.strip()
+        _rem_s = work_df[_latest_ms_col_l4].fillna("").astype(str).str.strip()
+        work_df["_ms_link"] = _rem_s.where(_rem_s.str.startswith("http"), _orig_s)
+        work_df["_is_recheck"] = _rem_s.str.startswith("http")
+    else:
+        work_df["_ms_link"] = work_df[col_ms].fillna("").astype(str).str.strip()
+        work_df["_is_recheck"] = False
     work_df = work_df[work_df["_ms_link"].str.startswith("http")].copy()
 
     def get_clean_series(col_name: str, default_val: str) -> pd.Series:
@@ -2548,9 +2561,9 @@ def main():
         work_df = work_df[work_df["_subj"] == sel_subj]
 
     c_hide, c_cap = st.columns([2, 2])
-    hide_audited = c_hide.checkbox("Hide already-audited rows (where QA Report Link exists)", value=True)
+    hide_audited = c_hide.checkbox("Hide already-audited rows (unless Latest Manuscript Link is ready for Recheck)", value=True)
     if hide_audited:
-        work_df = work_df[~work_df["_existing_report"].str.startswith("http")]
+        work_df = work_df[(~work_df["_existing_report"].str.startswith("http")) | (work_df["_is_recheck"])]
 
     max_rows = int(c_cap.slider("Max rows per execution:", min_value=1, max_value=50, value=15))
     work_df = work_df.head(max_rows).copy()
@@ -2707,6 +2720,10 @@ def main():
                     pass
 
                 if tracker["is_live_gsheet"]:
+                    _has_pass1 = bool(str(row.get("_existing_report", "") or "").strip().startswith("http"))
+                    _gate_ok = (float(score or 0) >= 80.0) and ("MAJOR" not in str(audit_dict.get("verdict", "")).upper())
+                    _gate_lbl = f"READY FOR CONSOLIDATION ({score}%)" if _gate_ok else f"Needs Remediation ({score}%)"
+                    _pass_tag = f"Recheck | {ts} | {_gate_lbl}" if _has_pass1 else f"Pass 1 | {ts} | {_gate_lbl}"
                     sync_live_sheet_row(
                         sheets_svc=sheets_svc,
                         spreadsheet_id=tracker["id"],
@@ -2716,9 +2733,50 @@ def main():
                         link_col_0idx=link_col_0idx,
                         status_col_0idx=status_col_0idx,
                         report_link=report_drive_link,
-                        status_text=status_label,
+                        status_text=_gate_lbl,
                         write_headers=(write_new_headers and step_i == 1),
                     )
+                    try:
+                        _meta_l4 = sheets_svc.spreadsheets().get(spreadsheetId=tracker["id"], fields="sheets.properties.title").execute()
+                        _rtab = selected_tab
+                        for _s in _meta_l4.get("sheets", []):
+                            _lt = _s.get("properties", {}).get("title", "")
+                            if _lt and (_lt == _rtab or _lt[:31] == _rtab[:31]):
+                                _rtab = _lt
+                                break
+                        _stab = _rtab.replace("'", "''")
+                        _cur_hdrs = sheets_svc.spreadsheets().values().get(
+                            spreadsheetId=tracker["id"], range=f"'{_stab}'!{header_row_1idx}:{header_row_1idx}"
+                        ).execute().get("values", [[]])[0]
+                        _cur_low = [str(h).strip().lower() for h in _cur_hdrs]
+                        _extra_ups = []
+                        _nxt_c = len(_cur_hdrs)
+                        if "latest qa report link" in _cur_low:
+                            _lrp_c = _cur_low.index("latest qa report link")
+                        else:
+                            _lrp_c = _nxt_c
+                            _nxt_c += 1
+                            _extra_ups.append({"range": f"'{_stab}'!{col_idx_to_a1(_lrp_c)}{header_row_1idx}", "values": [["Latest QA Report Link"]]})
+                        if "audit & remediation history" in _cur_low:
+                            _hst_c = _cur_low.index("audit & remediation history")
+                        else:
+                            _hst_c = _nxt_c
+                            _nxt_c += 1
+                            _extra_ups.append({"range": f"'{_stab}'!{col_idx_to_a1(_hst_c)}{header_row_1idx}", "values": [["Audit & Remediation History"]]})
+                        _extra_ups.append({"range": f"'{_stab}'!{col_idx_to_a1(_lrp_c)}{sheet_row}", "values": [[report_drive_link]]})
+                        _prev_h_vals = sheets_svc.spreadsheets().values().get(
+                            spreadsheetId=tracker["id"], range=f"'{_stab}'!{col_idx_to_a1(_hst_c)}{sheet_row}"
+                        ).execute().get("values", [])
+                        _prev_h = str(_prev_h_vals[0][0]).strip() if (_prev_h_vals and _prev_h_vals[0]) else ""
+                        _new_h = f"{_prev_h}\n[{_pass_tag}] {report_drive_link}".strip() if _prev_h else f"[{_pass_tag}] {report_drive_link}"
+                        _extra_ups.append({"range": f"'{_stab}'!{col_idx_to_a1(_hst_c)}{sheet_row}", "values": [[_new_h]]})
+                        if _has_pass1:
+                            _extra_ups.append({"range": f"'{_stab}'!{col_idx_to_a1(link_col_0idx)}{sheet_row}", "values": [[row["_existing_report"]]]})
+                        sheets_svc.spreadsheets().values().batchUpdate(
+                            spreadsheetId=tracker["id"], body={"valueInputOption": "USER_ENTERED", "data": _extra_ups}
+                        ).execute()
+                    except Exception:
+                        pass
 
                 results_log.append(
                     {
