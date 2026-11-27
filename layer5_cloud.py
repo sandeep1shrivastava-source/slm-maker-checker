@@ -175,42 +175,63 @@ def upload_file_to_drive(drive_svc, folder_id: str, filename: str, file_bytes: b
     return created.get("webViewLink") or f"https://drive.google.com/file/d/{created.get('id', '')}/view"
 
 
-def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload: dict) -> dict:
-    """Multi-provider AI router (Gemini, OpenAI, Anthropic, or Deterministic Offline Scaffolding)."""
+def _parse_json_lenient(raw_txt: str):
+    clean = re.sub(r"^```(?:json)?|```$", "", (raw_txt or "").strip(), flags=re.I).strip()
+    try:
+        return json.loads(clean)
+    except Exception:
+        m = re.search(r"(\{.*\}|\[.*\])", clean, flags=re.S)
+        if m:
+            return json.loads(m.group(1))
+        raise
+
+def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload):
+    """Multi-provider AI router with Pro-first routing, blank-body retries, and 16k output budget."""
     if provider.startswith("Deterministic"):
         return fallback_payload
-    try:
-        if provider.startswith("Gemini") and api_keys.get("gemini"):
-            resp = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_keys['gemini']}",
-                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}},
-                timeout=120,
-            )
-            resp.raise_for_status()
-            txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(re.sub(r"^```json|```$", "", txt.strip()).strip())
-        elif provider.startswith("OpenAI") and api_keys.get("openai"):
-            resp = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_keys['openai']}", "Content-Type": "application/json"},
-                json={"model": "gpt-4o-mini", "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": prompt}]},
-                timeout=120,
-            )
-            resp.raise_for_status()
-            txt = resp.json()["choices"][0]["message"]["content"]
-            return json.loads(re.sub(r"^```json|```$", "", txt.strip()).strip())
-        elif provider.startswith("Anthropic") and api_keys.get("anthropic"):
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": api_keys["anthropic"], "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
-                json={"model": "claude-3-5-sonnet-20241022", "max_tokens": 4096, "messages": [{"role": "user", "content": prompt + "\nReturn strictly valid JSON."}]},
-                timeout=120,
-            )
-            resp.raise_for_status()
-            txt = resp.json()["content"][0]["text"]
-            return json.loads(re.sub(r"^```json|```$", "", txt.strip()).strip())
-    except Exception:
-        pass
+    for attempt in range(3):
+        try:
+            if provider.startswith("Gemini") and api_keys.get("gemini"):
+                model_id = "gemini-2.5-pro" if attempt == 0 else "gemini-2.5-flash"
+                resp = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_keys['gemini']}",
+                    json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 16384}},
+                    timeout=180,
+                )
+                resp.raise_for_status()
+                if not (resp.text or "").strip():
+                    raise RuntimeError("Gemini returned empty HTTP 200 body")
+                txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return _parse_json_lenient(txt)
+            elif provider.startswith("OpenAI") and api_keys.get("openai"):
+                model_id = "gpt-4o" if attempt == 0 else "gpt-4o-mini"
+                resp = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {api_keys['openai']}", "Content-Type": "application/json"},
+                    json={"model": model_id, "response_format": {"type": "json_object"}, "max_tokens": 16384, "messages": [{"role": "user", "content": prompt}]},
+                    timeout=180,
+                )
+                resp.raise_for_status()
+                if not (resp.text or "").strip():
+                    raise RuntimeError("OpenAI returned empty HTTP 200 body")
+                txt = resp.json()["choices"][0]["message"]["content"]
+                return _parse_json_lenient(txt)
+            elif provider.startswith("Anthropic") and api_keys.get("anthropic"):
+                model_id = "claude-sonnet-4-6" if attempt == 0 else "claude-3-7-sonnet-20250219"
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={"x-api-key": api_keys["anthropic"], "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                    json={"model": model_id, "max_tokens": 16384, "messages": [{"role": "user", "content": prompt + "\nReturn strictly valid JSON."}]},
+                    timeout=180,
+                )
+                resp.raise_for_status()
+                if not (resp.text or "").strip():
+                    raise RuntimeError("Anthropic returned empty HTTP 200 body")
+                txt = resp.json()["content"][0]["text"]
+                return _parse_json_lenient(txt)
+        except Exception:
+            import time
+            time.sleep(1.5 * (attempt + 1))
     return fallback_payload
 
 
@@ -423,14 +444,44 @@ def sync_layer5_sheet_row(
     remediated_link: str,
     status_text: str,
     write_headers: bool = False,
+    history_col_0idx: int | None = None,
+    history_entry: str = "",
+    write_history_header: bool = False,
 ):
-    safe_tab = tab_name.replace("'", "''")
+    resolved_tab = tab_name
+    try:
+        meta = sheets_svc.spreadsheets().get(spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
+        for s in meta.get("sheets", []):
+            lt = s.get("properties", {}).get("title", "")
+            if lt and (lt == resolved_tab or lt[:31] == resolved_tab[:31]):
+                resolved_tab = lt
+                break
+    except Exception:
+        pass
+    safe_tab = resolved_tab.replace("'", "''")
     updates = []
     if write_headers:
-        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{header_row_1idx}", "values": [["Layer-5 Remediated Link"]]})
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{header_row_1idx}", "values": [["Latest Manuscript Link"]]})
         updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_status_col_0idx)}{header_row_1idx}", "values": [["Layer-5 Status"]]})
-    updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{data_row_1idx}", "values": [[remediated_link]]})
+    if write_history_header and history_col_0idx is not None:
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(history_col_0idx)}{header_row_1idx}", "values": [["Audit & Remediation History"]]})
+    if remediated_link:
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_link_col_0idx)}{data_row_1idx}", "values": [[remediated_link]]})
     updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(l5_status_col_0idx)}{data_row_1idx}", "values": [[status_text]]})
+    if history_col_0idx is not None and history_entry:
+        existing_hist = ""
+        try:
+            cur = sheets_svc.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"'{safe_tab}'!{col_idx_to_a1(history_col_0idx)}{data_row_1idx}",
+            ).execute()
+            vals = cur.get("values", [])
+            if vals and vals[0]:
+                existing_hist = str(vals[0][0] or "").strip()
+        except Exception:
+            pass
+        combined_hist = f"{existing_hist}\n{history_entry}".strip() if existing_hist else history_entry
+        updates.append({"range": f"'{safe_tab}'!{col_idx_to_a1(history_col_0idx)}{data_row_1idx}", "values": [[combined_hist]]})
     sheets_svc.spreadsheets().values().batchUpdate(
         spreadsheetId=spreadsheet_id,
         body={"valueInputOption": "USER_ENTERED", "data": updates},

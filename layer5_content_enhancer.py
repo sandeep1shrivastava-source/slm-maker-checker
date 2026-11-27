@@ -144,19 +144,38 @@ def auto_clean_mcq_workbook(source, audit_res: dict | None = None, llm_rephrase_
             stats["clean_items_kept"] += 1
 
             q_str = str(qv).strip()
-            if llm_rephrase_fn and re.match(r"^(Identify the|Choose the|Select the|Where is|When does)\b", q_str, re.I) and len(rephrase_batch) < 25:
-                rephrase_batch.append((out_row_idx, r, new_sr, q_str))
+            sub_str = str(row[cmap["sub"]]).strip() if "sub" in cmap and cmap["sub"] < len(row) and row[cmap["sub"]] is not None else ""
+            flagged_srs = set()
+            if audit_res:
+                blob = " ".join(str(x) for x in (audit_res.get("technical_errors", []) + audit_res.get("fixes_that_would_lift_score", [])))
+                for m_sr in re.finditer(r"\b(?:Q|Sr\.?\s*(?:No\.?)?)\s*(\d+)\b", blob, re.I):
+                    flagged_srs.add(int(m_sr.group(1)))
+            is_flagged = (new_sr in flagged_srs) or (srv is not None and str(srv).isdigit() and int(srv) in flagged_srs)
+            is_formulaic = bool(re.match(r"^(Where\b|When\b|Identify the|Choose the|Select the)\b", q_str, re.I))
+            if llm_rephrase_fn and (is_flagged or is_formulaic) and len(rephrase_batch) < 40:
+                rephrase_batch.append((out_row_idx, r, new_sr, q_str, sub_str, is_flagged))
 
         if llm_rephrase_fn and rephrase_batch:
             try:
-                rewritten = llm_rephrase_fn([x[3] for x in rephrase_batch])
+                rewritten = llm_rephrase_fn(rephrase_batch, audit_res or {})
                 if isinstance(rewritten, list) and len(rewritten) == len(rephrase_batch):
-                    for (out_r, orig_r, sr_i, old_q), new_q in zip(rephrase_batch, rewritten):
-                        nq_clean = str(new_q or "").strip()
+                    for (out_r, orig_r, sr_i, old_q, old_sub, was_flagged), item_fix in zip(rephrase_batch, rewritten):
+                        if isinstance(item_fix, dict):
+                            nq_clean = str(item_fix.get("question", "") or "").strip()
+                            nsub_clean = str(item_fix.get("syllabus_subpoint", "") or "").strip()
+                            reason = str(item_fix.get("reason", "Report-Anchored Stem & Alignment Fix") or "").strip()
+                        else:
+                            nq_clean = str(item_fix or "").strip()
+                            nsub_clean = ""
+                            reason = "Diversified Formulaic / Flagged Stem"
                         if nq_clean and nq_clean != old_q:
                             ws_out.cell(out_r, cmap["q"] + 1).value = nq_clean
                             stats["stems_diversified"] += 1
-                            log_rows.append([sname.strip(), orig_r, sr_i, "Diversified Formulaic Stem Opener", old_q[:90], nq_clean[:90]])
+                            log_rows.append([sname.strip(), orig_r, sr_i, reason, old_q[:110], nq_clean[:110]])
+                        if nsub_clean and "sub" in cmap and nsub_clean != old_sub:
+                            ws_out.cell(out_r, cmap["sub"] + 1).value = nsub_clean
+                            stats["metadata_realigned"] += 1
+                            log_rows.append([sname.strip(), orig_r, sr_i, "Realigned Syllabus Subpoint per L4 Finding", old_sub[:90], nsub_clean[:90]])
             except Exception:
                 pass
 

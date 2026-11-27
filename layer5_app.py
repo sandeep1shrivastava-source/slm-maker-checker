@@ -167,11 +167,23 @@ with tab_batch:
                         ci = raw_headers.index(col_name)
                         return str(row_vals[ci]).strip() if ci < len(row_vals) else ""
 
+                    lower_h_scan = [h.lower() for h in raw_headers]
+                    latest_ms_col = raw_headers[lower_h_scan.index("latest manuscript link")] if "latest manuscript link" in lower_h_scan else (
+                        raw_headers[lower_h_scan.index("layer-5 remediated link")] if "layer-5 remediated link" in lower_h_scan else None
+                    )
+                    latest_rp_col = raw_headers[lower_h_scan.index("latest qa report link")] if "latest qa report link" in lower_h_scan else None
+                    hist_col_existing = raw_headers[lower_h_scan.index("audit & remediation history")] if "audit & remediation history" in lower_h_scan else None
+
                     preview_records = []
                     for offset, rvals in enumerate(data_rows):
                         sheet_r = hdr_row_1idx + 1 + offset
-                        ms_u = _cell(rvals, col_ms)
-                        rp_u = _cell(rvals, col_rep)
+                        orig_ms_u = _cell(rvals, col_ms)
+                        prev_l5_u = _cell(rvals, latest_ms_col) if latest_ms_col else ""
+                        ms_u = prev_l5_u if extract_drive_id(prev_l5_u) else orig_ms_u
+                        prev_rp_u = _cell(rvals, latest_rp_col) if latest_rp_col else ""
+                        rp_u = prev_rp_u if extract_drive_id(prev_rp_u) else _cell(rvals, col_rep)
+                        hist_txt = _cell(rvals, hist_col_existing) if hist_col_existing else ""
+                        cycle_num = hist_txt.count("[Layer-5 v") + 1
                         if not ms_u and not rp_u:
                             continue
                         ready = bool(extract_drive_id(ms_u) and extract_drive_id(rp_u))
@@ -184,6 +196,7 @@ with tab_batch:
                             "Gate Check": "READY (Manuscript + L4 Report)" if ready else "LOCKED (Missing L4 Report or Link)",
                             "_ms_url": ms_u,
                             "_rep_url": rp_u,
+                            "_cycle_num": cycle_num,
                             "_univ": _cell(rvals, col_univ) or brand_cfg["name"],
                             "_prog": _cell(rvals, col_prog) or "Program",
                             "_sem": _cell(rvals, col_sem) or "Semester",
@@ -210,16 +223,28 @@ with tab_batch:
                         if st.button(f"Run Batch Layer-5 Remediation on {len(selected_rows)} Selected Row(s)", type="primary", use_container_width=True, disabled=not (selected_rows and target_folder_id)):
                             lower_hdrs = [h.lower() for h in raw_headers]
                             write_l5_hdrs = False
-                            if "layer-5 remediated link" in lower_hdrs:
+                            write_hist_hdr = False
+                            next_free_col = len(raw_headers)
+                            if "latest manuscript link" in lower_hdrs:
+                                l5_link_idx = lower_hdrs.index("latest manuscript link")
+                            elif "layer-5 remediated link" in lower_hdrs:
                                 l5_link_idx = lower_hdrs.index("layer-5 remediated link")
                             else:
-                                l5_link_idx = len(raw_headers)
+                                l5_link_idx = next_free_col
+                                next_free_col += 1
                                 write_l5_hdrs = True
                             if "layer-5 status" in lower_hdrs:
                                 l5_stat_idx = lower_hdrs.index("layer-5 status")
                             else:
-                                l5_stat_idx = l5_link_idx + 1
+                                l5_stat_idx = next_free_col
+                                next_free_col += 1
                                 write_l5_hdrs = True
+                            if "audit & remediation history" in lower_hdrs:
+                                hist_idx = lower_hdrs.index("audit & remediation history")
+                            else:
+                                hist_idx = next_free_col
+                                next_free_col += 1
+                                write_hist_hdr = True
 
                             prog_bar = st.progress(0.0)
                             batch_logs = []
@@ -236,8 +261,28 @@ with tab_batch:
                                         ts = datetime.now().strftime("%Y%m%d_%H%M")
                                         hierarchy = [item["_univ"], item["_prog"], item["_sem"], subj, "Layer-5 Updated Manuscripts"]
 
+                                        cyc_n = item.get("_cycle_num", 1)
                                         if m_fname.lower().endswith((".xlsx", ".xlsm")):
-                                            out_bytes, stats = auto_clean_mcq_workbook(m_bytes, audit_res=r1_parsed)
+                                            def _batch_mcq_llm_fn(batch_items, rep_dict):
+                                                items_payload = [
+                                                    {"sr_no": b[2], "question": b[3], "syllabus_subpoint": b[4], "flagged_in_l4": b[5]}
+                                                    for b in batch_items
+                                                ]
+                                                p_mcq = (
+                                                    "You are a Psychometric Assessment Editor fixing flagged MCQ items per a Layer-4 QA Audit Report.\n"
+                                                    "Rules:\n"
+                                                    "1. Replace any forced 'Where/When' stem opening where the answer is a concept/mechanism with 'Which/What'.\n"
+                                                    "2. Diversify repetitive 'Identify the / Choose the / Select the' openings into natural academic phrasing without changing the correct answer.\n"
+                                                    "3. If a question's syllabus_subpoint is flagged as drifted in the L4 findings below, correct the syllabus_subpoint.\n"
+                                                    f"L4 Findings: {json.dumps(rep_dict.get('technical_errors', [])[:15], ensure_ascii=False)}\n"
+                                                    f"Items: {json.dumps(items_payload, ensure_ascii=False)}\n"
+                                                    'Return strictly a JSON object: {"items": [{"sr_no": 1, "question": "...", "syllabus_subpoint": "...", "reason": "..."}]}'
+                                                )
+                                                res_j = call_layer5_llm(p_mcq, ai_provider, api_keys, {"items": []})
+                                                fixed_map = {int(x["sr_no"]): x for x in res_j.get("items", []) if isinstance(x, dict) and "sr_no" in x}
+                                                return [fixed_map.get(b[2], {"question": b[3], "syllabus_subpoint": b[4]}) for b in batch_items]
+
+                                            out_bytes, stats = auto_clean_mcq_workbook(m_bytes, audit_res=r1_parsed, llm_rephrase_fn=_batch_mcq_llm_fn)
                                             wb = openpyxl.load_workbook(io.BytesIO(out_bytes))
                                             ws_b = wb.create_sheet(title="L4_Report_v1_Baseline")
                                             ws_b.append(["Layer-4 Report File", r_fname])
@@ -250,9 +295,10 @@ with tab_batch:
                                             b_io = io.BytesIO()
                                             wb.save(b_io)
                                             final_bytes = b_io.getvalue()
-                                            out_name = f"Updated_{sanitize_drive_name(subj)}_{sanitize_drive_name(topic)}_{ts}.xlsx"
+                                            out_name = f"Updated_{sanitize_drive_name(subj)}_{sanitize_drive_name(topic)}_v{cyc_n}_{ts}.xlsx"
                                             mime_t = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                            st_lbl = f"Updated MCQ (R1={r1_parsed.get('overall_score', '')})"
+                                            edits_cnt = sum(stats.get(k, 0) for k in ("headers_fixed", "keys_normalized", "metadata_realigned", "duplicates_removed", "banners_stripped", "stems_diversified"))
+                                            st_lbl = f"Remediated v{cyc_n} ({edits_cnt} fixes | R1={r1_parsed.get('overall_score', '')})"
                                         else:
                                             ch_txt = extract_manuscript_text(m_bytes, m_fname)
                                             fb = {
@@ -264,11 +310,12 @@ with tab_batch:
                                             pr = build_surgical_fixit_prompt(topic, subj, ch_txt[:45000], r1_parsed)
                                             pl = call_layer5_llm(pr, ai_provider, api_keys, fb)
                                             final_bytes, ext_out, mime_t = build_updated_manuscript_bytes(m_bytes, m_fname, topic, subj, pl)
-                                            out_name = f"Updated_{sanitize_drive_name(subj)}_{sanitize_drive_name(topic)}_{ts}{ext_out}"
-                                            st_lbl = f"Updated Manuscript (R1={r1_parsed.get('overall_score', '')})"
+                                            out_name = f"Updated_{sanitize_drive_name(subj)}_{sanitize_drive_name(topic)}_v{cyc_n}_{ts}{ext_out}"
+                                            st_lbl = f"Remediated v{cyc_n} (R1={r1_parsed.get('overall_score', '')})"
 
                                         zf.writestr(out_name, final_bytes)
                                         drv_link = upload_to_drive_hierarchy(drive_svc, target_folder_id, hierarchy, out_name, final_bytes, mime_t)
+                                        hist_line = f"[Layer-5 v{cyc_n} | {ts} | {st_lbl}] {drv_link}"
                                         sync_layer5_sheet_row(
                                             sheets_svc=sheets_svc,
                                             spreadsheet_id=tracker_id,
@@ -280,6 +327,9 @@ with tab_batch:
                                             remediated_link=drv_link,
                                             status_text=st_lbl,
                                             write_headers=(write_l5_hdrs and step_i == 1),
+                                            history_col_0idx=hist_idx,
+                                            history_entry=hist_line,
+                                            write_history_header=(write_hist_hdr and step_i == 1),
                                         )
                                         batch_logs.append({"Sheet Row": s_row, "Subject": subj, "Topic / Unit": topic, "Status": st_lbl, "Updated Manuscript Link": drv_link})
                                     except Exception as row_err:
