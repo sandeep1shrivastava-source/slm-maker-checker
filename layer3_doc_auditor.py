@@ -1141,6 +1141,44 @@ def prepare_manuscript_context(text: str, max_chars: int = 92000) -> str:
     )
 
 
+def _repair_unescaped_json_quotes(text: str) -> str:
+    """Forward-scanning state machine that escapes unescaped double-quotes inside JSON string values."""
+    out = []
+    in_string = False
+    escape_next = False
+    n = len(text)
+    for i, ch in enumerate(text):
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"':
+            if not in_string:
+                in_string = True
+                out.append(ch)
+            else:
+                j = i + 1
+                while j < n and text[j] in " \t\r\n":
+                    j += 1
+                next_ch = text[j] if j < n else ""
+                if next_ch in (",", "}", "]", ":", ""):
+                    in_string = False
+                    out.append(ch)
+                else:
+                    out.append('\\"')
+            continue
+        if in_string and ch in ("\n", "\r", "\t"):
+            out.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def extract_json_object(raw_text: str) -> dict:
     """Safely parses JSON even if an LLM wraps in Markdown fences, leaves trailing commas, or includes unescaped quotes."""
     cleaned = raw_text.strip()
@@ -1152,35 +1190,16 @@ def extract_json_object(raw_text: str) -> dict:
     end = cleaned.rfind("}")
     candidate = cleaned[start : end + 1] if (start != -1 and end != -1 and end > start) else cleaned
 
-    # Pass 1 & 2: Standard & lenient control-character parsing
     for strict_mode in (True, False):
         try:
             return json.loads(candidate, strict=strict_mode)
         except json.JSONDecodeError:
             pass
 
-    # Pass 3: Strip trailing commas before } or ]
     repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
-    try:
-        return json.loads(repaired, strict=False)
-    except json.JSONDecodeError:
-        pass
+    repaired = _repair_unescaped_json_quotes(repaired)
+    return json.loads(repaired, strict=False)
 
-    # Pass 4: Iterative repair for unescaped interior double quotes inside JSON string values
-    work = repaired
-    for _ in range(40):
-        try:
-            return json.loads(work, strict=False)
-        except json.JSONDecodeError as exc:
-            pos = exc.pos
-            q_idx = work.rfind('"', 0, pos)
-            while q_idx > 0 and work[q_idx - 1] == "\\":
-                q_idx = work.rfind('"', 0, q_idx)
-            if q_idx <= 0:
-                break
-            work = work[:q_idx] + '\\"' + work[q_idx + 1 :]
-
-    return json.loads(candidate)
 
 
 def _legacy_build_deterministic_fallback_report(
