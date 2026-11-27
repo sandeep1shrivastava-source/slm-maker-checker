@@ -263,7 +263,9 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
         except Exception as _e:
             last_err = _e
             import time
-            time.sleep(1.5 * (attempt + 1))
+            is_429 = "429" in str(_e) or "Too Many Requests" in str(_e)
+            wait_s = (15.0 * (attempt + 1)) if is_429 else (2.0 * (attempt + 1))
+            time.sleep(wait_s)
     if last_err is not None:
         raise RuntimeError(f"LLM remediation failed ({provider}): {re.sub(r'key=[^&\s]+', 'key=***', str(last_err))}")
     return fallback_payload

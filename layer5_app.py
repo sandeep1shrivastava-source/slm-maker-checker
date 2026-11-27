@@ -356,6 +356,7 @@ with tab_batch:
                                                 "glossary_terms": [{"term": topic, "definition": "Core instructional concept."}],
                                             }
                                             pr = build_surgical_fixit_prompt(topic, subj, ch_txt[:45000], r1_parsed)
+                                            import time as _t; _t.sleep(3.0)
                                             pl = call_layer5_llm(pr, ai_provider, api_keys, fb)
                                             pl = {'prose_rewrites': pl} if isinstance(pl, list) else (pl if isinstance(pl, dict) else {})
                                             final_bytes, ext_out, mime_t = build_updated_manuscript_bytes(m_bytes, m_fname, topic, subj, pl)
