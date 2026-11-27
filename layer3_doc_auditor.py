@@ -1675,6 +1675,15 @@ Return ONLY valid JSON with these exact keys:
                         parsed["executive_verdict"] = f"MAJOR CHANGES REQUIRED: {ev}"
                 key_tag = f" | Key #{key_idx}" if len(key_pool) > 1 else ""
                 parsed["_ai_provider_used"] = f"{provider} ({active_model}{key_tag})"
+                _cv_val = round(float(precheck.get("cv", ai_cv) or 0.0), 3)
+                if cv_gate > 0:
+                    parsed["ai_index_verdict"] = (
+                        f"Pass — Natural academic cadence (Prose CV {_cv_val} >= {cv_gate})"
+                        if _cv_val >= cv_gate
+                        else f"Fail (Prose CV {_cv_val} < {cv_gate})"
+                    )
+                else:
+                    parsed["ai_index_verdict"] = f"Pass (<{_cfg['max_ai_pct']}% estimated AI — Burstiness CV {_cv_val})"
                 return parsed
             except Exception as exc:
                 err_txt = str(exc)
