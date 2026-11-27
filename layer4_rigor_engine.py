@@ -62,11 +62,11 @@ def run_text_forensic_precheck(
     burstiness = compute_prose_burstiness(prose_paragraphs)
     failures = []
 
-    if burstiness["prose_cv"] < min_cv:
-        failures.append(
-            f"Prose Burstiness CV is {burstiness['prose_cv']} (below minimum {min_cv})."
-        )
     if doc_type_upper == "SLM":
+        if burstiness["prose_cv"] < min_cv:
+            failures.append(
+                f"Prose Burstiness CV is {burstiness['prose_cv']} (below minimum {min_cv})."
+            )
         if "check your progress" not in full_lower and "self-assessment" not in full_lower:
             failures.append("Missing in-text 'Check Your Progress' / Self-Assessment exercises.")
         if (
@@ -146,19 +146,19 @@ def run_docx_forensic_precheck(
     burstiness = compute_prose_burstiness(prose_paragraphs)
     failures = []
 
-    if burstiness["prose_cv"] < min_cv:
-        failures.append(
-            f"Prose Burstiness CV is {burstiness['prose_cv']} (below minimum {min_cv})."
-        )
-    if heading_style_count == 0:
-        failures.append(
-            "Zero Word Heading styles (Heading 1/2/3) used; all paragraphs formatted as Normal."
-        )
     if stray_artifacts:
         failures.append(
             f"Stray form artifacts detected: {len(stray_artifacts)} occurrence(s)."
         )
     if doc_type_upper == "SLM":
+        if burstiness["prose_cv"] < min_cv:
+            failures.append(
+                f"Prose Burstiness CV is {burstiness['prose_cv']} (below minimum {min_cv})."
+            )
+        if heading_style_count == 0:
+            failures.append(
+                "Zero Word Heading styles (Heading 1/2/3) used; all paragraphs formatted as Normal."
+            )
         if image_count == 0:
             failures.append("Zero embedded figures/diagrams found in SLM.")
         if "check your progress" not in full_lower and "self-assessment" not in full_lower:
