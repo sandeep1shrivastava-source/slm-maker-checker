@@ -292,7 +292,8 @@ with tab_batch:
                                             wb = openpyxl.load_workbook(io.BytesIO(out_bytes))
                                             # Populate Model Answer Key on Subjective sheet if present and missing answers
                                             subj_sheets = [s for s in wb.sheetnames if "subjective" in s.lower()]
-                                            if subj_sheets and not ai_provider.startswith("Deterministic"):
+                                            try:
+                                              if subj_sheets and not ai_provider.startswith("Deterministic"):
                                                 ws_sub = wb[subj_sheets[0]]
                                                 s_hdrs = [str(ws_sub.cell(1, c).value or "").strip().lower() for c in range(1, ws_sub.max_column + 1)]
                                                 if "question" in s_hdrs and not any("answer" in h or "solution" in h for h in s_hdrs):
@@ -329,6 +330,8 @@ with tab_batch:
                                                                     stats["metadata_realigned"] = stats.get("metadata_realigned", 0) + 1
                                                                     if ws_log_ref is not None:
                                                                         ws_log_ref.append([subj_sheets[0].strip(), item_q["row"], item_q["sr_no"], "Added Model Answer Key per L4 Finding", "(missing)", ma_txt[:110]])
+                                            except Exception as _sub_err:
+                                                st.warning(f"Subjective model answer generation partial/skipped: {_sub_err}")
                                             ws_b = wb.create_sheet(title="L4_Report_v1_Baseline")
                                             ws_b.append(["Layer-4 Report File", r_fname])
                                             ws_b.append(["Baseline Score (R1)", str(r1_parsed.get("overall_score", ""))])
@@ -378,6 +381,9 @@ with tab_batch:
                                         )
                                         batch_logs.append({"Sheet Row": s_row, "Subject": subj, "Topic / Unit": topic, "Status": st_lbl, "Updated Manuscript Link": drv_link})
                                     except Exception as row_err:
+                                        import traceback
+                                        st.error(f"Row {s_row} ({topic}) failed: {row_err}")
+                                        st.code(traceback.format_exc())
                                         err_txt = f"Error: {str(row_err)[:110]}"
                                         try:
                                             sync_layer5_sheet_row(sheets_svc, tracker_id, selected_tab, hdr_row_1idx, s_row, l5_link_idx, l5_stat_idx, "", err_txt, write_headers=(write_l5_hdrs and step_i == 1))
