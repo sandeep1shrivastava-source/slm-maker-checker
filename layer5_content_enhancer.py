@@ -256,7 +256,10 @@ def build_surgical_fixit_docx(title: str, subject: str, fixit_payload: dict) -> 
             doc.add_paragraph("No surgical patches required in this category.")
             continue
         tbl = doc.add_table(rows=1, cols=len(headers))
-        tbl.style = "Table Grid"
+        try:
+            tbl.style = "Table Grid"
+        except Exception:
+            pass
         for idx, h_text in enumerate(headers):
             cell = tbl.rows[0].cells[idx]
             cell.text = h_text
@@ -357,6 +360,14 @@ def extract_manuscript_text(raw_bytes: bytes, filename: str) -> str:
 
 
 
+def _safe_add_bullet(doc, text: str):
+    try:
+        if "List Bullet" in [s.name for s in doc.styles]:
+            return _safe_add_bullet(doc, text)
+    except Exception:
+        pass
+    return doc.add_paragraph(f"\u2022 {text}")
+
 def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, subject: str, payload: dict) -> tuple[bytes, str, str]:
     """Clones the original .docx/.pptx/.txt manuscript and embeds approved Layer-5 fixes inline (Zero-Risk Clone-on-Write)."""
     fn = filename.lower()
@@ -410,7 +421,7 @@ def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, 
     if rewrites:
         doc.add_heading("Applied Editorial & Academic Corrections", level=2)
         for idx, rw in enumerate(rewrites, start=1):
-            doc.add_paragraph(f"{idx}. [{rw.get('section', title)}] {rw.get('issue', '')}", style="List Bullet")
+            _safe_add_bullet(doc, f"{idx}. [{rw.get('section', title)}] {rw.get('issue', '')}")
             doc.add_paragraph(f"Updated Text: {rw.get('revised_text', '')}")
 
     if cyps:
@@ -422,7 +433,7 @@ def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, 
     if glossary:
         doc.add_heading("Key Terms & Glossary", level=2)
         for g in glossary:
-            doc.add_paragraph(f"{g.get('term', '')}: {g.get('definition', '')}", style="List Bullet")
+            _safe_add_bullet(doc, f"{g.get('term', '')}: {g.get('definition', '')}")
 
     out = io.BytesIO()
     doc.save(out)
