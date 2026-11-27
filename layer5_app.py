@@ -357,6 +357,7 @@ with tab_batch:
                                             }
                                             pr = build_surgical_fixit_prompt(topic, subj, ch_txt[:45000], r1_parsed)
                                             pl = call_layer5_llm(pr, ai_provider, api_keys, fb)
+                                            pl = {'prose_rewrites': pl} if isinstance(pl, list) else (pl if isinstance(pl, dict) else {})
                                             final_bytes, ext_out, mime_t = build_updated_manuscript_bytes(m_bytes, m_fname, topic, subj, pl)
                                             out_name = f"Updated_{sanitize_drive_name(subj)}_{sanitize_drive_name(topic)}_v{cyc_n}_{ts}{ext_out}"
                                             st_lbl = f"Remediated v{cyc_n} (R1={r1_parsed.get('overall_score', '')})"

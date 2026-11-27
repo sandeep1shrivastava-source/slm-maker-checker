@@ -368,7 +368,21 @@ def _safe_add_bullet(doc, text: str):
         pass
     return doc.add_paragraph(f"\u2022 {text}")
 
+def _sanitize_xml_obj(obj):
+    if isinstance(obj, str):
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", obj)
+    if isinstance(obj, list):
+        return [_sanitize_xml_obj(x) for x in obj]
+    if isinstance(obj, dict):
+        return {str(k): _sanitize_xml_obj(v) for k, v in obj.items()}
+    return obj
+
 def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, subject: str, payload: dict) -> tuple[bytes, str, str]:
+    payload = _sanitize_xml_obj(payload)
+    if isinstance(payload, list):
+        payload = {"prose_rewrites": [x for x in payload if isinstance(x, dict)]}
+    elif not isinstance(payload, dict):
+        payload = {}
     """Clones the original .docx/.pptx/.txt manuscript and embeds approved Layer-5 fixes inline (Zero-Risk Clone-on-Write)."""
     fn = filename.lower()
     rewrites = payload.get("prose_rewrites", []) or []
