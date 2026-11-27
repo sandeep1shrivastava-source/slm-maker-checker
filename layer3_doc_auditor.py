@@ -920,8 +920,25 @@ def sync_live_sheet_row(
     status_text: str,
     write_headers: bool = False,
 ):
-    """Writes QA Report Link and Audit Status directly into the live Google Sheet."""
-    safe_tab = tab_name.replace("'", "''")
+    """Writes QA Report Link and Audit Status directly into the live Google Sheet, resolving 31-char Excel tab truncation."""
+    resolved_tab = tab_name
+    try:
+        meta = sheets_svc.spreadsheets().get(
+            spreadsheetId=spreadsheet_id, fields="sheets.properties.title"
+        ).execute()
+        live_titles = [
+            s.get("properties", {}).get("title", "")
+            for s in meta.get("sheets", [])
+            if s.get("properties", {}).get("title")
+        ]
+        if resolved_tab not in live_titles:
+            for lt in live_titles:
+                if lt[:31] == resolved_tab[:31] or lt.strip().lower() == resolved_tab.strip().lower():
+                    resolved_tab = lt
+                    break
+    except Exception:
+        pass
+    safe_tab = resolved_tab.replace("'", "''")
     updates = []
     if write_headers:
         link_hdr_cell = f"'{safe_tab}'!{col_idx_to_a1(link_col_0idx)}{header_row_1idx}"
@@ -2707,7 +2724,10 @@ def main():
                 )
 
             except Exception as row_exc:
-                err_msg = f"Error: {str(row_exc)[:120]}"
+                err_msg = f"Error: {str(row_exc)[:220]}"
+                saved_link = locals().get("report_drive_link", "")
+                if saved_link:
+                    out_ws.cell(row=sheet_row, column=link_col_0idx + 1, value=saved_link)
                 out_ws.cell(row=sheet_row, column=status_col_0idx + 1, value=err_msg)
                 if tracker["is_live_gsheet"]:
                     try:
@@ -2719,7 +2739,7 @@ def main():
                             data_row_1idx=sheet_row,
                             link_col_0idx=link_col_0idx,
                             status_col_0idx=status_col_0idx,
-                            report_link="",
+                            report_link=saved_link,
                             status_text=err_msg,
                             write_headers=(write_new_headers and step_i == 1),
                         )
