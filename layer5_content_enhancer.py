@@ -368,6 +368,18 @@ def _safe_add_bullet(doc, text: str):
         pass
     return doc.add_paragraph(f"\u2022 {text}")
 
+def _clean_xml_text(val) -> str:
+    if val is None:
+        return ""
+    s = str(val)
+    return "".join(
+        ch for ch in s
+        if (ord(ch) in (0x9, 0xA, 0xD))
+        or (0x20 <= ord(ch) <= 0xD7FF)
+        or (0xE000 <= ord(ch) <= 0xFFFD)
+        or (0x10000 <= ord(ch) <= 0x10FFFF)
+    )
+
 def _sanitize_xml_obj(obj):
     if isinstance(obj, str):
         return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", obj)
@@ -413,6 +425,10 @@ def build_updated_manuscript_bytes(raw_bytes: bytes, filename: str, title: str, 
 
     # Build full cloned .docx manuscript with inline replacements + CYP + Glossary + Change Log
     doc = Document(io.BytesIO(raw_bytes)) if fn.endswith(".docx") else Document()
+    _orig_add_para = doc.add_paragraph
+    def _clean_add_para(text='', style=None):
+        return _orig_add_para(_clean_xml_text(text), style=style) if style is not None else _orig_add_para(_clean_xml_text(text))
+    doc.add_paragraph = _clean_add_para
     if not fn.endswith(".docx"):
         doc.add_heading(title, level=1)
         for line in extract_manuscript_text(raw_bytes, filename).splitlines():
