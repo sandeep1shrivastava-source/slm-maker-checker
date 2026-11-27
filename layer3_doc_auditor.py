@@ -1380,13 +1380,12 @@ def call_anthropic_rest(api_key: str, model_id: str, system_instruction: str, us
     url = "https://api.anthropic.com/v1/messages"
     headers = {
         "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": "2026-10-21",
         "Content-Type": "application/json",
     }
     payload = {
         "model": model_id,
         "max_tokens": 8192,
-        "temperature": 0.15,
         "system": system_instruction,
         "messages": [
             {"role": "user", "content": user_prompt + "\n\nRespond ONLY with valid JSON."},
