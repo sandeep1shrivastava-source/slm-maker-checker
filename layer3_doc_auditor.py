@@ -1397,6 +1397,7 @@ def call_gemini_rest(api_key: str, model_id: str, system_instruction: str, user_
         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
         "generationConfig": {
             "temperature": 0.15,
+            "maxOutputTokens": 16384,
             "responseMimeType": "application/json",
         },
     }
@@ -1526,7 +1527,7 @@ def run_multi_provider_layer3_audit(
             flash = sorted([x for x in live if "flash" in x and "lite" not in x], reverse=True)
             pro = sorted([x for x in live if "pro" in x], reverse=True)
             ordered = []
-            for item in lite + flash + pro:
+            for item in pro + flash + lite:
                 if item not in ordered:
                     ordered.append(item)
             return ordered[:2]
@@ -1538,7 +1539,7 @@ def run_multi_provider_layer3_audit(
         note = "" if provider.startswith("Deterministic") else f"No API key supplied for {provider}; ran deterministic fallback"
         return build_deterministic_fallback_report(title, fmt, mcq_stats, ai_cv, bool(syllabus_text.strip()), note)
 
-    ms_context = prepare_manuscript_context(manuscript_text, max_chars=45000)
+    ms_context = prepare_manuscript_context(manuscript_text, max_chars=85000)
     syl_context = syllabus_text[:12000] if syllabus_text.strip() else "NO SYLLABUS PROVIDED."
 
     deterministic_notes = json.dumps(
@@ -1582,11 +1583,13 @@ Return ONLY valid JSON with these exact keys:
   "layer2_slm_matrix": [{{"param_no": 1, "dimension": "Syllabus & Curriculum Mapping", "score_achieved": 8.0, "weight": 10, "findings": "...", "remediation": "..."}}],
   "layer2_mcq_defects": [{{"Item_ID": "Q1", "Tab_Category": "Technical Errors", "Severity": "Major", "Defect_Description": "...", "Deduction": 5.0}}],
   "score_breakdown": [
-    {{"criteria": "Subject knowledge / factual errors", "max_deduction": "-30%", "deducted": "-2%", "finding": "..."}},
+    {{"criteria": "Subject knowledge / factual errors", "max_deduction": "-30%", "deducted": "-1%", "finding": "..."}},
     {{"criteria": "Technical errors (letter vs answer mismatch)", "max_deduction": "-30%", "deducted": "0%", "finding": "..."}},
-    {{"criteria": "Clarity & repetition", "max_deduction": "-20%", "deducted": "-10%", "finding": "..."}},
-    {{"criteria": "Grammar & semantics", "max_deduction": "-10%", "deducted": "-2%", "finding": "..."}},
-    {{"criteria": "Subject mismatch", "max_deduction": "-10%", "deducted": "0%", "finding": "..."}}
+    {{"criteria": "Distractor plausibility & length bias", "max_deduction": "-15%", "deducted": "-2%", "finding": "For MCQ/QB: check if correct option is systematically longest or distractors are absurd; omit for SLM."}},
+    {{"criteria": "Clarity & repetition", "max_deduction": "-10%", "deducted": "-2%", "finding": "..."}},
+    {{"criteria": "Bloom's taxonomy & difficulty spread", "max_deduction": "-5%", "deducted": "-1%", "finding": "For MCQ/QB: audit BTL/difficulty alignment against actual cognitive demand; omit for SLM."}},
+    {{"criteria": "Grammar, semantics & negative stem formatting", "max_deduction": "-5%", "deducted": "-1%", "finding": "..."}},
+    {{"criteria": "Syllabus / unit coverage drift", "max_deduction": "-5%", "deducted": "0%", "finding": "..."}}
   ],
   "subject_knowledge_issues": [{{"item_ref": "Section 1", "issue": "...", "suggestion": "..."}}],
   "technical_errors_summary": "Summary of technical/structural errors.",
