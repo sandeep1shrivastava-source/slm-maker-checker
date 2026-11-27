@@ -266,6 +266,12 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
             is_429 = "429" in str(_e) or "Too Many Requests" in str(_e)
             wait_s = (15.0 * (attempt + 1)) if is_429 else (2.0 * (attempt + 1))
             time.sleep(wait_s)
+    # Automatic cross-provider failover on 429 quota exhaustion
+    if last_err is not None and ("429" in str(last_err) or "Too Many Requests" in str(last_err)):
+        if not provider.startswith("OpenAI") and oai_key:
+            return call_layer5_llm(prompt, "OpenAI (ChatGPT gpt-4o)", api_keys, fallback_payload)
+        if not provider.startswith("Anthropic") and ant_key:
+            return call_layer5_llm(prompt, "Anthropic (Claude Sonnet 4.6)", api_keys, fallback_payload)
     if last_err is not None:
         raise RuntimeError(f"LLM remediation failed ({provider}): {re.sub(r'key=[^&\s]+', 'key=***', str(last_err))}")
     return fallback_payload
