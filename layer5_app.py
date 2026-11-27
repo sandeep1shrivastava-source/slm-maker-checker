@@ -274,7 +274,7 @@ with tab_batch:
                                                     "1. Replace any forced 'Where/When' stem opening where the answer is a concept/mechanism with 'Which/What'.\n"
                                                     "2. Diversify repetitive 'Identify the / Choose the / Select the' openings into natural academic phrasing without changing the correct answer.\n"
                                                     "3. If a question's syllabus_subpoint is flagged as drifted in the L4 findings below, correct the syllabus_subpoint.\n"
-                                                    f"L4 Findings: {json.dumps(rep_dict.get('technical_errors', [])[:15], ensure_ascii=False)}\n"
+                                                    f"L4 Findings & Rubric Breakdown: {json.dumps((rep_dict.get('technical_errors', []) + rep_dict.get('score_breakdown', []))[:20], ensure_ascii=False)}\n"
                                                     f"Items: {json.dumps(items_payload, ensure_ascii=False)}\n"
                                                     'Return strictly a JSON object: {"items": [{"sr_no": 1, "question": "...", "syllabus_subpoint": "...", "reason": "..."}]}'
                                                 )
@@ -284,6 +284,39 @@ with tab_batch:
 
                                             out_bytes, stats = auto_clean_mcq_workbook(m_bytes, audit_res=r1_parsed, llm_rephrase_fn=_batch_mcq_llm_fn)
                                             wb = openpyxl.load_workbook(io.BytesIO(out_bytes))
+                                            # Populate Model Answer Key on Subjective sheet if present and missing answers
+                                            subj_sheets = [s for s in wb.sheetnames if "subjective" in s.lower()]
+                                            if subj_sheets and not ai_provider.startswith("Deterministic"):
+                                                ws_sub = wb[subj_sheets[0]]
+                                                s_hdrs = [str(ws_sub.cell(1, c).value or "").strip().lower() for c in range(1, ws_sub.max_column + 1)]
+                                                if "question" in s_hdrs and not any("answer" in h or "solution" in h for h in s_hdrs):
+                                                    q_c = s_hdrs.index("question") + 1
+                                                    sr_c = (s_hdrs.index("sr. no.") + 1) if "sr. no." in s_hdrs else 1
+                                                    ans_c = ws_sub.max_column + 1
+                                                    ws_sub.cell(1, ans_c, value="Model Answer / Key Points")
+                                                    ws_log_ref = wb["Audit_Change_Log"] if "Audit_Change_Log" in wb.sheetnames else None
+                                                    for chunk_start in range(2, ws_sub.max_row + 1, 20):
+                                                        chunk_q = []
+                                                        for r_i in range(chunk_start, min(chunk_start + 20, ws_sub.max_row + 1)):
+                                                            q_val = str(ws_sub.cell(r_i, q_c).value or "").strip()
+                                                            sr_val = ws_sub.cell(r_i, sr_c).value or (r_i - 1)
+                                                            if q_val:
+                                                                chunk_q.append({"row": r_i, "sr_no": sr_val, "question": q_val})
+                                                        if chunk_q:
+                                                            p_sub = (
+                                                                "Generate concise, UGC-aligned academic model answer key points (3-4 bullet points per question) for these subjective questions.\n"
+                                                                f"Questions: {json.dumps(chunk_q, ensure_ascii=False)}\n"
+                                                                'Return strictly JSON: {"answers": [{"row": 2, "model_answer": "..."}]}'
+                                                            )
+                                                            ans_res = call_layer5_llm(p_sub, ai_provider, api_keys, {"answers": []})
+                                                            ans_map = {int(a["row"]): str(a.get("model_answer", "")).strip() for a in ans_res.get("answers", []) if isinstance(a, dict) and "row" in a}
+                                                            for item_q in chunk_q:
+                                                                ma_txt = ans_map.get(item_q["row"], "")
+                                                                if ma_txt:
+                                                                    ws_sub.cell(item_q["row"], ans_c, value=ma_txt)
+                                                                    stats["metadata_realigned"] = stats.get("metadata_realigned", 0) + 1
+                                                                    if ws_log_ref is not None:
+                                                                        ws_log_ref.append([subj_sheets[0].strip(), item_q["row"], item_q["sr_no"], "Added Model Answer Key per L4 Finding", "(missing)", ma_txt[:110]])
                                             ws_b = wb.create_sheet(title="L4_Report_v1_Baseline")
                                             ws_b.append(["Layer-4 Report File", r_fname])
                                             ws_b.append(["Baseline Score (R1)", str(r1_parsed.get("overall_score", ""))])
