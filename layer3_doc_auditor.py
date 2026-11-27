@@ -1142,19 +1142,45 @@ def prepare_manuscript_context(text: str, max_chars: int = 92000) -> str:
 
 
 def extract_json_object(raw_text: str) -> dict:
-    """Safely parses JSON even if an LLM wraps the response in Markdown code fences."""
+    """Safely parses JSON even if an LLM wraps in Markdown fences, leaves trailing commas, or includes unescaped quotes."""
     cleaned = raw_text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    candidate = cleaned[start : end + 1] if (start != -1 and end != -1 and end > start) else cleaned
+
+    # Pass 1 & 2: Standard & lenient control-character parsing
+    for strict_mode in (True, False):
+        try:
+            return json.loads(candidate, strict=strict_mode)
+        except json.JSONDecodeError:
+            pass
+
+    # Pass 3: Strip trailing commas before } or ]
+    repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
     try:
-        return json.loads(cleaned)
+        return json.loads(repaired, strict=False)
     except json.JSONDecodeError:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            return json.loads(cleaned[start : end + 1])
-        raise
+        pass
+
+    # Pass 4: Iterative repair for unescaped interior double quotes inside JSON string values
+    work = repaired
+    for _ in range(40):
+        try:
+            return json.loads(work, strict=False)
+        except json.JSONDecodeError as exc:
+            pos = exc.pos
+            q_idx = work.rfind('"', 0, pos)
+            while q_idx > 0 and work[q_idx - 1] == "\\":
+                q_idx = work.rfind('"', 0, q_idx)
+            if q_idx <= 0:
+                break
+            work = work[:q_idx] + '\\"' + work[q_idx + 1 :]
+
+    return json.loads(candidate)
 
 
 def _legacy_build_deterministic_fallback_report(
@@ -1388,7 +1414,7 @@ def call_anthropic_rest(api_key: str, model_id: str, system_instruction: str, us
         "max_tokens": 8192,
         "system": system_instruction,
         "messages": [
-            {"role": "user", "content": user_prompt + "\n\nRespond ONLY with valid JSON."},
+            {"role": "user", "content": user_prompt + "\n\nRespond ONLY with valid JSON. Use single quotes instead of double quotes inside string values so JSON remains valid."},
         ],
     }
     resp = requests.post(url, headers=headers, json=payload, timeout=150)
