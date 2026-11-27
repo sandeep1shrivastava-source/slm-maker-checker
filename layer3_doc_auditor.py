@@ -1196,6 +1196,14 @@ def extract_json_object(raw_text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
+    try:
+        from json_repair import repair_json
+        repaired_obj = repair_json(candidate, return_objects=True)
+        if isinstance(repaired_obj, dict) and repaired_obj:
+            return repaired_obj
+    except Exception:
+        pass
+
     repaired = re.sub(r",\s*([}\]])", r"\1", candidate)
     repaired = _repair_unescaped_json_quotes(repaired)
     return json.loads(repaired, strict=False)
@@ -1428,15 +1436,18 @@ def call_anthropic_rest(api_key: str, model_id: str, system_instruction: str, us
         "anthropic-version": "2026-10-21",
         "Content-Type": "application/json",
     }
-    payload = {
+    base_payload = {
         "model": model_id,
         "max_tokens": 8192,
         "system": system_instruction,
         "messages": [
-            {"role": "user", "content": user_prompt + "\n\nRespond ONLY with valid JSON. Use single quotes instead of double quotes inside string values so JSON remains valid."},
+            {"role": "user", "content": user_prompt + "\n\nRespond ONLY with valid JSON. Never include unescaped double quotes inside string values."},
         ],
     }
+    payload = {**base_payload, "output_config": {"format": {"type": "json_object"}}}
     resp = requests.post(url, headers=headers, json=payload, timeout=150)
+    if resp.status_code == 400 and "output_config" in resp.text:
+        resp = requests.post(url, headers=headers, json=base_payload, timeout=150)
     if resp.status_code != 200:
         raise RuntimeError(f"Anthropic HTTP {resp.status_code}: {resp.text[:250]}")
     content_blocks = resp.json().get("content", [])
