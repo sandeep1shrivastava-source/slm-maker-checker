@@ -279,7 +279,13 @@ with tab_batch:
                                                     'Return strictly a JSON object: {"items": [{"sr_no": 1, "question": "...", "syllabus_subpoint": "...", "reason": "..."}]}'
                                                 )
                                                 res_j = call_layer5_llm(p_mcq, ai_provider, api_keys, {"items": []})
-                                                fixed_map = {int(x["sr_no"]): x for x in res_j.get("items", []) if isinstance(x, dict) and "sr_no" in x}
+                                                raw_items = res_j if isinstance(res_j, list) else (res_j.get("items", []) if isinstance(res_j, dict) else [])
+                                                fixed_map = {}
+                                                for x in raw_items:
+                                                    if isinstance(x, dict) and x.get("sr_no") is not None:
+                                                        m_num = re.search(r"\d+", str(x["sr_no"]))
+                                                        if m_num:
+                                                            fixed_map[int(m_num.group(0))] = x
                                                 return [fixed_map.get(b[2], {"question": b[3], "syllabus_subpoint": b[4]}) for b in batch_items]
 
                                             out_bytes, stats = auto_clean_mcq_workbook(m_bytes, audit_res=r1_parsed, llm_rephrase_fn=_batch_mcq_llm_fn)
@@ -309,7 +315,13 @@ with tab_batch:
                                                                 'Return strictly JSON: {"answers": [{"row": 2, "model_answer": "..."}]}'
                                                             )
                                                             ans_res = call_layer5_llm(p_sub, ai_provider, api_keys, {"answers": []})
-                                                            ans_map = {int(a["row"]): str(a.get("model_answer", "")).strip() for a in ans_res.get("answers", []) if isinstance(a, dict) and "row" in a}
+                                                            raw_ans = ans_res if isinstance(ans_res, list) else (ans_res.get("answers", []) if isinstance(ans_res, dict) else [])
+                                                            ans_map = {}
+                                                            for a in raw_ans:
+                                                                if isinstance(a, dict) and a.get("row") is not None:
+                                                                    m_r = re.search(r"\d+", str(a["row"]))
+                                                                    if m_r:
+                                                                        ans_map[int(m_r.group(0))] = str(a.get("model_answer", "")).strip()
                                                             for item_q in chunk_q:
                                                                 ma_txt = ans_map.get(item_q["row"], "")
                                                                 if ma_txt:
