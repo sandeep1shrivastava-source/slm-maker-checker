@@ -65,8 +65,8 @@ with st.sidebar:
     ai_provider = st.selectbox(
         "AI Provider",
         [
-            "Gemini 2.5 Pro (Default)",
-            "OpenAI (ChatGPT gpt-4o-mini)",
+            "Gemini 3.1 Pro (Default)",
+            "OpenAI (ChatGPT gpt-4o)",
             "Anthropic (Claude Sonnet 4.6)",
             "Deterministic Offline Scaffolding (No AI Key)",
         ],

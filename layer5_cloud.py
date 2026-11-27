@@ -219,7 +219,7 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
             if provider.startswith("Gemini"):
                 if not gem_key:
                     raise RuntimeError("Missing Gemini API key (set GEMINI_API_KEY in Streamlit Secrets or sidebar).")
-                model_id = "gemini-2.5-pro" if attempt == 0 else "gemini-2.5-flash"
+                model_id = "gemini-3.1-pro-preview" if attempt == 0 else "gemini-3-flash-preview"
                 resp = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={gem_key}",
                     json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 16384}},
@@ -265,7 +265,7 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
             import time
             time.sleep(1.5 * (attempt + 1))
     if last_err is not None:
-        raise RuntimeError(f"LLM remediation failed ({provider}): {last_err}")
+        raise RuntimeError(f"LLM remediation failed ({provider}): {re.sub(r'key=[^&\s]+', 'key=***', str(last_err))}")
     return fallback_payload
 
 
