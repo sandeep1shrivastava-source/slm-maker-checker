@@ -185,16 +185,43 @@ def _parse_json_lenient(raw_txt: str):
             return json.loads(m.group(1))
         raise
 
+def _resolve_provider_key(api_keys: dict, names: tuple[str, ...]) -> str:
+    for n in names:
+        v = (api_keys or {}).get(n) or (api_keys or {}).get(n.lower()) or (api_keys or {}).get(n.upper())
+        if v and str(v).strip():
+            return str(v).strip()
+    try:
+        import streamlit as st
+        for n in names:
+            if n in st.secrets and str(st.secrets[n]).strip():
+                return str(st.secrets[n]).strip()
+            for sec_sect in ("api_keys", "llm", "keys"):
+                if sec_sect in st.secrets and n in st.secrets[sec_sect]:
+                    return str(st.secrets[sec_sect][n]).strip()
+    except Exception:
+        pass
+    import os
+    for n in names:
+        if os.environ.get(n, "").strip():
+            return os.environ[n].strip()
+    return ""
+
 def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload):
-    """Multi-provider AI router with Pro-first routing, blank-body retries, and 16k output budget."""
+    """Multi-provider AI router with st.secrets auto-resolution, Pro-first routing, and error reporting."""
     if provider.startswith("Deterministic"):
         return fallback_payload
+    gem_key = _resolve_provider_key(api_keys, ("gemini", "GEMINI_API_KEY", "GOOGLE_API_KEY"))
+    oai_key = _resolve_provider_key(api_keys, ("openai", "OPENAI_API_KEY"))
+    ant_key = _resolve_provider_key(api_keys, ("anthropic", "ANTHROPIC_API_KEY"))
+    last_err = None
     for attempt in range(3):
         try:
-            if provider.startswith("Gemini") and api_keys.get("gemini"):
+            if provider.startswith("Gemini"):
+                if not gem_key:
+                    raise RuntimeError("Missing Gemini API key (set GEMINI_API_KEY in Streamlit Secrets or sidebar).")
                 model_id = "gemini-2.5-pro" if attempt == 0 else "gemini-2.5-flash"
                 resp = requests.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_keys['gemini']}",
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={gem_key}",
                     json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 16384}},
                     timeout=180,
                 )
@@ -203,11 +230,13 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
                     raise RuntimeError("Gemini returned empty HTTP 200 body")
                 txt = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
                 return _parse_json_lenient(txt)
-            elif provider.startswith("OpenAI") and api_keys.get("openai"):
+            elif provider.startswith("OpenAI"):
+                if not oai_key:
+                    raise RuntimeError("Missing OpenAI API key (set OPENAI_API_KEY in Streamlit Secrets or sidebar).")
                 model_id = "gpt-4o" if attempt == 0 else "gpt-4o-mini"
                 resp = requests.post(
                     "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {api_keys['openai']}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {oai_key}", "Content-Type": "application/json"},
                     json={"model": model_id, "response_format": {"type": "json_object"}, "max_tokens": 16384, "messages": [{"role": "user", "content": prompt}]},
                     timeout=180,
                 )
@@ -216,11 +245,13 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
                     raise RuntimeError("OpenAI returned empty HTTP 200 body")
                 txt = resp.json()["choices"][0]["message"]["content"]
                 return _parse_json_lenient(txt)
-            elif provider.startswith("Anthropic") and api_keys.get("anthropic"):
-                model_id = "claude-sonnet-4-6" if attempt == 0 else "claude-3-7-sonnet-20250219"
+            elif provider.startswith("Anthropic"):
+                if not ant_key:
+                    raise RuntimeError("Missing Anthropic API key (set ANTHROPIC_API_KEY in Streamlit Secrets or sidebar).")
+                model_id = "claude-sonnet-4-6" if attempt == 0 else "claude-sonnet-5-5"
                 resp = requests.post(
                     "https://api.anthropic.com/v1/messages",
-                    headers={"x-api-key": api_keys["anthropic"], "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+                    headers={"x-api-key": ant_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
                     json={"model": model_id, "max_tokens": 16384, "messages": [{"role": "user", "content": prompt + "\nReturn strictly valid JSON."}]},
                     timeout=180,
                 )
@@ -229,9 +260,12 @@ def call_layer5_llm(prompt: str, provider: str, api_keys: dict, fallback_payload
                     raise RuntimeError("Anthropic returned empty HTTP 200 body")
                 txt = resp.json()["content"][0]["text"]
                 return _parse_json_lenient(txt)
-        except Exception:
+        except Exception as _e:
+            last_err = _e
             import time
             time.sleep(1.5 * (attempt + 1))
+    if last_err is not None:
+        raise RuntimeError(f"LLM remediation failed ({provider}): {last_err}")
     return fallback_payload
 
 
